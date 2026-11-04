@@ -1,0 +1,23 @@
+# Windows
+[Dd]esktop.ini
+Thumbs.db
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+
+# Node.js
+node_modules/
+
+# 评审截图（非源码，115+ png，体积大且不入库）
+review-shots/
+
+# 临时验证脚本（开发期探针，非游戏本体）
+tmp-*.js
+
+# 日志
+*.log

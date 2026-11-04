@@ -1,0 +1,88 @@
+{
+  "description": "国际象棋微信小游戏",
+  "packOptions": {
+    "ignore": [
+      {
+        "type": "folder",
+        "value": "review-shots"
+      },
+      {
+        "type": "folder",
+        "value": "tools"
+      },
+      {
+        "type": "suffix",
+        "value": ".md"
+      },
+      {
+        "type": "file",
+        "value": "test.js"
+      },
+      {
+        "type": "file",
+        "value": "test-integration.js"
+      },
+      {
+        "type": "file",
+        "value": "test-engine.js"
+      },
+      {
+        "type": "file",
+        "value": "test-endgame.js"
+      },
+      {
+        "type": "file",
+        "value": "test-endgame-scene.js"
+      },
+      {
+        "type": "file",
+        "value": "test-gameplay.js"
+      },
+      {
+        "type": "file",
+        "value": "test-cloud.js"
+      },
+      {
+        "type": "file",
+        "value": "test-sync.js"
+      },
+      {
+        "type": "file",
+        "value": "verify-round2.js"
+      }
+    ],
+    "include": []
+  },
+  "setting": {
+    "bundle": false,
+    "es6": true,
+    "postcss": false,
+    "minified": false,
+    "urlCheck": false,
+    "compileWorklet": false,
+    "uglifyFileName": false,
+    "uploadWithSourceMap": true,
+    "enhance": false,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "useCompilerPlugins": false,
+    "condition": false,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "compileType": "game",
+  "libVersion": "3.0.0",
+  "appid": "wx5a78cb07bad9cf59",
+  "projectname": "chess-game",
+  "condition": {},
+  "simulatorPluginLibVersion": {},
+  "isGameTourist": false,
+  "editorSetting": {}
+}
