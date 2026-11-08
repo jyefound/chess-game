@@ -21,3 +21,6 @@ tmp-*.js
 
 # 日志
 *.log
+
+# CloudBase 调试配置（工具生成，非游戏资产）
+.cloudbase/
