@@ -844,4 +844,5 @@ module.exports.runAccountAction = runAccountAction;
 module.exports.authStatusHint = authStatusHint;
 // 基本资料昵称读写（供 gameplay 记录远程对端昵称 / 棋谱链路复用，仅导出不改实现）
 module.exports.readProfile = readProfile;
-module.exports.cleanNickname = cleanNickname;\nmodule.exports.writeProfile = writeProfile;
+module.exports.cleanNickname = cleanNickname;
+module.exports.writeProfile = writeProfile;
