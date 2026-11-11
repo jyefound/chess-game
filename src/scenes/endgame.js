@@ -1804,7 +1804,11 @@ class EndgameScene {
         return;
       }
       if (piece && piece.color === this.game.turn) { this.selectPiece(row, col); return; }
-      this.selected = null; this.legalMoves = []; this.state = 'PLAYING'; return;
+      // 残局练习也要明确反馈非法落点，避免初学者误以为触控没有响应。
+      this.selected = null; this.legalMoves = []; this.state = 'PLAYING';
+      GameContext.emit('uiError');
+      GameContext.showBanner('这步走不通', 'warning');
+      return;
     }
     if (piece && piece.color === this.game.turn) this.selectPiece(row, col);
   }

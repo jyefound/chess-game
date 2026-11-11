@@ -179,6 +179,7 @@ function attachEngine(game) {
       game.startFen = fen;
       game.positionCounts = new Map();
       game.positionCounts.set(game.getPositionKey(), 1);
+      game.checkGameResult();
       return true;
     },
 
@@ -196,6 +197,21 @@ function attachEngine(game) {
     /** 撤销一步 */
     undo: function () {
       return game.undoMove();
+    },
+
+    /** 当前是否满足三次重复 / 五十回合的和棋申请条件。 */
+    canClaimDraw: function () {
+      return game.canClaimDraw();
+    },
+
+    /** 当前可申请和棋理由（threefold / fifty_moves）。 */
+    getClaimableDrawReasons: function () {
+      return game.getClaimableDrawReasons();
+    },
+
+    /** 申请当前局面的和棋。 */
+    claimDraw: function (reason) {
+      return game.claimDraw(reason);
     },
 
     /** 终局判定（含未经 makeMove 的合成残局起始即终局） */

@@ -98,8 +98,10 @@ function genGameId() {
 }
 function reasonText(reason) {
   return ({
-    checkmate: '将杀', stalemate: '逼和（无子可动）', fifty_moves: '50 回合规则',
-    insufficient_material: '子力不足', threefold: '三次重复局面', resign: '认输'
+    checkmate: '将杀', stalemate: '逼和（无子可动）',
+    fifty_moves: '50 回合规则（申请和棋）', seventyfive_moves: '75 回合自动和棋',
+    insufficient_material: '子力不足', threefold: '三次重复局面（申请和棋）',
+    fivefold: '五次重复局面', resign: '认输'
   })[reason] || '';
 }
 
@@ -1357,13 +1359,24 @@ class GameplayScene {
       { key: 'resign', label: '认输', danger: true },
       { key: 'menu', label: '返回菜单' }
     ];
+    // 本地/人机对局可申请和棋；远程房间的结果必须经服务端协议同步，不能只改本端状态。
+    if (this.mode !== 'remote' &&
+        (this.mode !== 'ai' || this.game.turn === this.playerColor) &&
+        this.game && this.game.canClaimDraw && this.game.canClaimDraw()) {
+      const reasons = this.game.getClaimableDrawReasons();
+      const labels = reasons.map(reason => reason === 'threefold' ? '重复局面' : '50 回合');
+      items.splice(2, 0, { key: 'claimDraw', label: '申请和棋 · ' + labels.join(' / ') });
+    }
     // 远程对弈：房间协议暂无认输同步能力，隐藏单方认输以免两端结束态不一致；
     // v5：补「结束对弈（按兵力判定）」常驻入口，走二次确认 + judgeByMaterial 流程。
     if (this.mode === 'remote') {
       for (let i = items.length - 1; i >= 0; i--) if (items[i].key === 'resign') items.splice(i, 1);
       items.splice(items.length - 1, 0, { key: 'abort', label: '结束对弈（按兵力判定）', danger: true });
     }
-    const rowH = 44, gap = 6, rx = 24, rw = W - 48;
+    const gap = 4, rx = 24, rw = W - 48;
+    // 和棋申请仅在少数局面增加一行；矮屏同步压缩抽屉行高，避免底部操作被安全区裁切。
+    const maxDrawerH = Math.max(260, H - _navTop - _safeB - 16);
+    const rowH = Math.max(36, Math.min(44, Math.floor((maxDrawerH - 80) / items.length) - gap));
     const sh = 74 + items.length * (rowH + gap) + 6;
     const sy = Math.max(_navTop + 8, H - sh - _safeB);
     util.withShadow(ctx, theme.elevation.e2, () => { ctx.fillStyle = C.surface1; rr(ctx, 8, sy, W - 16, sh, R.modal); ctx.fill(); });
@@ -1540,6 +1553,13 @@ class GameplayScene {
       // 设置 / 保存进度：调用原有 action（不新增逻辑，仅改入口）
       if (r.key === 'settings') { GameContext.closeModal(); GameContext.openModal('settingsDrawer', {}); return; }
       if (r.key === 'save') { GameContext.closeModal(); this.manualSave(); return; }
+      if (r.key === 'claimDraw') {
+        const claimed = this.game && this.game.claimDraw && this.game.claimDraw();
+        GameContext.closeModal();
+        if (claimed) this.onGameOver();
+        else GameContext.showBanner('当前局面暂不可申请和棋', 'warning');
+        return;
+      }
       if (r.key === 'flip') { this.toggleBoardFlip(); }
       else if (r.key === 'rules') { this.openRules(); }
       else if (r.key === 'copy') { this.copyRecord(); GameContext.closeModal(); }
@@ -1942,7 +1962,7 @@ class GameplayScene {
   openRules() {
     GameContext.openModal('confirm', {
       title: '基本规则', height: 220,
-      message: '白先黑后。兵直走斜吃、到底线升变；车走横竖、象走斜线、后横竖斜、马走「日」、王每次一格。王车易位与吃过路兵为特殊走法。将死对方王即获胜；逼和、50 回合、三次重复、子力不足为和棋。',
+      message: '白先黑后。兵直走斜吃、到底线升变；车走横竖、象走斜线、后横竖斜、马走「日」、王每次一格。王车易位与吃过路兵为特殊走法。将死获胜；逼和、子力不足自动和棋；50 回合或三次重复可申请和棋，75 回合或五次重复自动和棋。',
       buttons: [{ label: '知道了', action: 'ok', variant: 'primary' }],
       onAction: () => GameContext.closeModal()
     });

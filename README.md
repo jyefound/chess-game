@@ -61,6 +61,7 @@ chess-game/
 | `node test.js` | 规则引擎基础（走法 / 升变 / SAN 记谱，9 项检查全绿） |
 | `node test-integration.js` | 场景 / 导航 / 远程房间集成冒烟 **96/0** |
 | `node test-engine.js` | 多棋类引擎与存档契约 **62/0** |
+| `node test-mechanics.js` | FIDE 和棋规则、死局、重复局面、终局输入保护与 EP 特征码 |
 | `node test-endgame.js` | 100 阵残局数值表一致性 **100/100** |
 | `node test-endgame-scene.js` | 残局闯关场景数据 **86/0** |
 | `node test-gameplay.js` | 玩法 / 提示 / AI 指导 / 远程对局 **98/0**（0 跳过） |

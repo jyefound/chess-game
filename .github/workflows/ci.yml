@@ -1,0 +1,49 @@
+name: Chess game CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Node regression suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax check
+        run: |
+          node --check game.js
+          find src -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          for file in test*.js tools/*.js; do
+            [ -f "$file" ] && node --check "$file"
+          done
+      - name: Core and rules tests
+        run: |
+          node test.js
+          node test-engine.js
+          node test-mechanics.js
+      - name: Gameplay and data regressions
+        run: |
+          node test-integration.js
+          node test-gameplay.js
+          node test-endgame.js
+          node test-endgame-scene.js
+          node test-room.js
+          node test-cloud.js
+          node test-sync.js
+          node test-recovery.js
+          node tools/verify-round2.js
+      - name: Publish configuration sanity check
+        run: node tools/publish-check.js
