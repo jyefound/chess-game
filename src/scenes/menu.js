@@ -343,10 +343,7 @@ class MenuScene {
     } else if (key === 'academy') {
       GameContext.emit('navigate', { to: 'academy' });
       GameContext.pushScene('academy', { from: 'menu' });
-    } else if (key === 'settings') {
-      GameContext.emit('navigate', { to: 'settings' });
-      GameContext.pushScene('settings', { from: 'menu' });
-    } else if (key === 'records') {
+    } else if (key === 'personalCenter') {\n      GameContext.emit('navigate', { to: 'personalCenter' });\n      GameContext.pushScene('personalCenter', { from: 'menu' });\n    } else if (key === 'records') {
       GameContext.emit('navigate', { to: 'records' });
       GameContext.pushScene('records', {});
     }

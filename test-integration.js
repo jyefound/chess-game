@@ -421,7 +421,7 @@ if (sceneManager) {
       versusRegistered = !!sceneManager.scenes.versus;
     } catch (e) { versusRegistered = false; }
   }
-  const need = ['menu','setup','gameplay','teaching','records','replay','settings'];
+  const need = ['menu','setup','gameplay','teaching','records','replay','settings','personalCenter'];
   const needV2 = ['academy','endgameMap','endgame'];
   if (roomRegistered) need.push('room');
   else console.log('  ⊘ 跳过：room 场景注册/冒烟（模块未落盘，集成时复跑）');
@@ -440,7 +440,7 @@ if (sceneManager) {
   const enterParams = {
     menu: {}, setup: {}, teaching: {},
     gameplay: { mode: 'local' },
-    settings: {}, records: {},
+    settings: {}, personalCenter: {}, records: {},
     academy: {},
     endgameMap: {},
     endgame: { level: 1 },
