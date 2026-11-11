@@ -72,6 +72,10 @@
 2. **横屏 / 平板适配**（报告 §5/§9）：endgame `layout()` 未处理 isLandscape/isTablet；teaching 棋盘硬锁 304px 未随平板放大。
 3. **动态 `globalAlpha` 合成对比度真机复核**（报告 §12.3）：设置禁用 0.4 / 锁定卡 0.4–0.5 / 记录锁定 0.10 的静态态已间接确认风险方向，仍建议真机量测（本轮已用 `disabledFg` + 全不透明策略覆盖主要文字）。
 4. **装饰发丝线真机复核**（§11.5 装饰豁免）：accentLine/border 在异形屏是否需提亮。
+5. **`.watch()` 在微信小游戏端真机可用性**（本批次 · 远程双人对弈）：`src/core/room.js` 以 `.watch()` 实时推送为主、2.5s 轮询兜底；小游戏基础库对实时数据推送的支持情况待真机确认，不可用时应能无缝回落到轮询（见 `CLOUD_DEPLOY.md` §12.6）。
+6. **无云函数下的反作弊边界**（本批次）：不部署云函数 ⇒ 无法在服务端校验走子合法性或做权威反作弊，靠 6 位高熵房间码 + `rev` CAS + 随机席位串在应用层识别；需评估好友休闲场景之外的滥用风险与是否追加约束（见 `PRIVACY_POLICY.md` §十三）。
+7. **平板 / 横屏下房间页适配**（本批次）：`src/scenes/room.js` 在 `isTablet` / 横屏下的房间码输入、分享卡片、等待态布局待走查；当前工程竖屏锁定，横屏 IA 仍不可达（见 `V2_UX_SPEC.md` §6.3）。
+8. **房间数据过期清理策略（无服务端定时器）**（本批次）：`chess_rooms` 文档带 `expireAt`、6h 过期，但无云函数 / 服务端定时任务做物理清理，靠前端惰性判定 + 房主删除 / 「删除云端数据」触发 `room.deleteAllRooms()`；需评估残留过期文档的配额影响与后续清理策略（见 `CLOUD_DEPLOY.md` §12.3 / §12.4）。
 
 ### 一致性 / 打磨（P3，非阻断）
 
@@ -204,11 +208,12 @@
   极矮屏教练提示不再完全消失（320×568 harness 0 失败）。
 - **`replay.js` 执黑方位预览**：玩家 `playerColor==='b'` 时棋盘翻转，并在元信息卡与棋盘间预留 24px 标签位画出「**执黑 · 棋盘已翻转**」pill（`accentFade` 底 + `accentLine` 描边 + `accentSoft` 字），四周留出相邻 2 行上下文提示方位（视觉复核确认翻转 + 标签可见）。
 
-### §5 双人对弈（local）视角随 sideToMove 翻转
+### §5 双人对弈（local）视角随 sideToMove 翻转【本批次已变更，见下方「变更」】
 - 复用既有 `local` 模式与 `flipBoard`：`gameplay.js enter()` 在 `mode==='local'` 下设 `flipBoard = (game.turn===BLACK)`（白先走→白在底=false）；
   `commitMove()` 走子后、`doUndo()` 悔棋后均按 `game.turn` 重新同步 —— **当前走子方始终在屏幕底部（近端玩家视角）**，每步随轮次 180° 翻转。
 - HUD 顶/底色与「轮到谁」高亮本就由 `flipBoard` 推导，无需改命名逻辑；坐标系 `cellToScreen/screenToBoard` 已就绪。
 - 验证：harness `gameplay-local`（进入 `flipBoard=false` 白在底）→ `gameplay-local-flip`（白走一步后 `flipBoard=true` 黑在底）均 0 失败。
+- **本批次变更（依据：用户需求，2026-11-08）**：本地双人棋盘方向**改为全程固定** —— 默认白在屏幕下方（`flipBoard=false`），**不再随 `sideToMove` / `game.turn` 翻转**；仅玩家**手动调转**时才改变且**持续保持**（不因走子 / 悔棋复位）。屏幕上方一侧的棋子旋转 **180° 朝上**。`mode:'remote'` 亦各端固定看自己执棋色一侧、全程不翻转。上文「视角随轮次翻转」为变更前设计，仅作历史记录，不再适用。
 
 ### 涉及文件
 - **修改**：`src/scenes/endgame.js`、`src/scenes/teaching.js`、`src/scenes/menu.js`、`src/scenes/settings.js`、`src/scenes/replay.js`、`src/scenes/gameplay.js`

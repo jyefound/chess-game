@@ -3,7 +3,7 @@
  * - 安全区布局：core/layout.js（contentTop/contentBottom 避开灵动岛/home indicator）
  * - 唯一 Primary：动态标签 —— 有进度时「继续 · 第 N 阵」（N=最大已破+1=unlockedLevel，钳到 TOTAL），无进度时「残局闯关」；+「NEW」徽章（已破 0/TOTAL 时显示）+「已破 N/TOTAL」进度
  *   N = storage.loadEndgame().unlockedLevel（未破时=1，已破 k 阵时为 k+1）；TOTAL = ENDGAMES.length（残局总数）
- * - Secondary：人机对战（→ setup，skipSetup 直连）/ 双人对弈（→ gameplay local，参数沿用现状）
+ * - Secondary：人机对战（→ setup，skipSetup 直连）/ 双人对弈（→ versus 对局方式页：默认本地双人，次级入口「邀请好友加入」→ room）
  * - 次级行（图标+文字 44×52 热区）：锦囊阁(→academy) / 棋谱(→records) / 设置(→settings)；音效开关已并入「设置」页（SETTING_DEFS 首项）
  * - 基础教学降级进锦囊阁 hub（S8 academy），不再一级并列（C-5）
  * - 主视觉取代启动页：黄铜径向光晕 + 矢量棋子残局剪影构图（低透明度，drawPiece 离屏绘制），弱化纯标题启动页感；去 emoji，图标一律 drawIcon（必带文字标签，C6）
@@ -171,8 +171,8 @@ class MenuScene {
     this._endgameBtn(ctx, btnX, priY, btnW, priH);
     // 人机对战（Secondary）
     this._mainBtn(ctx, btnX, sec1Y, btnW, secH, 'ai', '人机对战', 'ai');
-    // 双人对弈（Secondary）
-    this._mainBtn(ctx, btnX, sec2Y, btnW, secH, 'local', '双人对弈', 'twoPlayers');
+    // 双人对弈（Secondary，单入口）：进入后在对局方式页选择本地双人 / 邀请好友加入
+    this._mainBtn(ctx, btnX, sec2Y, btnW, secH, 'versus', '双人对弈', 'twoPlayers');
 
     // ---- 次级行：锦囊阁 / 棋谱 / 设置（图标必带标签，C6）----
     // 音效开关已并入「设置」页（SETTING_DEFS 首项），首屏不再单列，层级更清晰。
@@ -336,10 +336,10 @@ class MenuScene {
       } else {
         GameContext.pushScene('setup', {});
       }
-    } else if (key === 'local') {
-      // 双人对弈直连 gameplay（本地双人参数沿用现状；V2 §3.3 场景图「双人直连」）
-      GameContext.emit('navigate', { to: 'gameplay' });
-      GameContext.pushScene('gameplay', { mode: 'local' });
+    } else if (key === 'versus') {
+      // 双人对弈：进入对局方式页（默认本地双人，可选邀请好友加入）
+      GameContext.emit('navigate', { to: 'versus' });
+      GameContext.pushScene('versus', { from: 'menu' });
     } else if (key === 'academy') {
       GameContext.emit('navigate', { to: 'academy' });
       GameContext.pushScene('academy', { from: 'menu' });

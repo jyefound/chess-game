@@ -324,7 +324,13 @@ const STORAGE_KEYS = {
   privacy: 'chess.privacy.v1',
   profile: 'chess.profile.v1',
   syncMeta: 'chess.sync.meta.v1',
-  syncQueue: 'chess.sync.queue.v1'
+  syncQueue: 'chess.sync.queue.v1',
+  // 远程房间：仅记录本地 seat/roomId 断点（room.js 直接 wx.setStorageSync，绝不经过 storage 写 hook）
+  room: 'chess.room.v1',
+  // 封存残局本地索引（大写 A → 不匹配 sync.js 的 KEY_RE → 天然不被云端镜像进 chess_records）
+  roomArchive: 'chess.roomArchive.v1',
+  // 房主建房前的局数草稿（大写 D → 不匹配 sync.js 的 KEY_RE → 天然不被云端镜像）
+  roomDraft: 'chess.roomDraft.v1'
 };
 const LIMITS = { maxRecords: 50, maxPlies: 400, maxSkills: 8 };
 
@@ -337,7 +343,7 @@ const LIMITS = { maxRecords: 50, maxPlies: 400, maxSkills: 8 };
 const CLOUD_CONFIG = {
   enabled: true,           // 部署开关；env 已填（freedom-land-d4gv0gs78c0dd7b2f），开启云端链路
   env: 'freedom-land-d4gv0gs78c0dd7b2f', // 云环境 ID（微信云开发，绑定 AppID wx5a78cb07bad9cf59）
-  collections: { state: 'chess_state', records: 'chess_records' },
+  collections: { state: 'chess_state', records: 'chess_records', rooms: 'chess_rooms' },
   schemaVersion: 1,
   debounceMs: 600,
   maxRetries: 3,
@@ -346,6 +352,49 @@ const CLOUD_CONFIG = {
   maxBatchBytes: 400 * 1024,     // 整批 < 前端 512KB 上限
   tombstoneDays: 90,
   pullOnShow: true
+};
+
+// ---------------------------------------------------------------------------
+// 远程双人对弈 · 房间配置（v4 · 独立云端通道）
+// 与 CLOUD_CONFIG 的 KV 镜像完全解耦：chess_rooms 集合走 room.js 独立读写，
+// 不经过 storage 的 28 个 API / 写 hook / sync.js 的 pendingQueue。
+// 房间码为 6 位数字，分享链接即凭证：10^6 组合 + expireAt 6h 过期 +
+// idx_roomId 唯一索引 + rev CAS 保证好友对弈一致（好友邀请场景熵足够）。
+// ---------------------------------------------------------------------------
+const ROOM_CONFIG = {
+  codeLen: 6,               // 房间码长度（6 位纯数字）
+  codeAlphabet: '0123456789', // 6 位纯数字，供 Canvas 自绘数字键盘输入（保留前导零）
+  seatLen: 16,
+  pollIntervalMs: 2500,     // watch 兜底轮询间隔
+  watchGuardMs: 8000,       // watch 静默超过此时长触发兜底轮询
+  expireMs: 6 * 60 * 60 * 1000, // 房间 6h 过期
+  maxMoves: 400,            // 与 LIMITS.maxPlies 对齐
+  maxRetries: 3,            // CAS 冲突 / 房间码碰撞重试上限
+  schemaVersion: 1,
+  // ---- v5：退出仲裁 / 封存残局 / 多局比分 / 在线心跳 ----
+  maxGamesDefault: 0,        // 房主未设置局数时 = 无限模式（0 表示不限）
+  leaveTimeoutMs: 60000,     // 退出方轮到出棋后，未退出方可发起仲裁的等待时长（1 分钟）
+  bothLeftKeepMs: 600000,    // 双方均退出后房间保留时长（10 分钟），超时自动解散
+  archiveKeepMs: 604800000,  // 封存残局保留时长（7 天）
+  presenceTimeoutMs: 45000,  // 心跳判定对方掉线的阈值（45s）
+  presenceIntervalMs: 10000, // 本端心跳上报间隔（10s）
+  nickMaxLen: 12             // 昵称最大长度（与 settings.js 的 cleanNickname 一致）
+};
+
+// ---------------------------------------------------------------------------
+// 房间结算结果枚举（v5）
+// 场景层判断胜负一律读本枚举，禁止在场景里裸写字符串。
+// materialWhite/materialBlack = 按剩余兵力判定；abandoned = 双方均退出自动解散；
+// archived = 封存残局（不判成绩）；resignWhite/resignBlack = 认输。
+// ---------------------------------------------------------------------------
+const ROOM_RESULT = {
+  materialWhite: 'material_white_win',
+  materialBlack: 'material_black_win',
+  draw: 'draw',
+  abandoned: 'abandoned',
+  archived: 'archived',
+  resignWhite: 'resign_white',
+  resignBlack: 'resign_black'
 };
 
 const DEFAULT_SETTINGS = {
@@ -443,5 +492,9 @@ module.exports = {
     return ACTIVE_GAME;
   },
   // v3 云端 KV 镜像
-  CLOUD_CONFIG: CLOUD_CONFIG
+  CLOUD_CONFIG: CLOUD_CONFIG,
+  // v4 远程双人对弈 · 房间配置
+  ROOM_CONFIG: ROOM_CONFIG,
+  // v5 房间结算结果枚举（场景层禁止裸写字符串）
+  ROOM_RESULT: ROOM_RESULT
 };

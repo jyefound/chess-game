@@ -20,6 +20,8 @@ const SettingsScene = require('./src/scenes/settings');
 const AcademyScene = require('./src/scenes/academy');
 const EndgameMapScene = require('./src/scenes/endgameMap');
 const EndgameScene = require('./src/scenes/endgame');
+const RoomScene = require('./src/scenes/room');   // 远程双人对弈 · 房间入口
+const VersusScene = require('./src/scenes/versus'); // 双人对弈 · 对局方式选择页（本地双人 / 邀请好友）
 const GameContext = require('./src/context');
 const config = require('./src/config');
 
@@ -78,6 +80,8 @@ sceneManager.register('settings', new SettingsScene());
 sceneManager.register('academy', new AcademyScene());
 sceneManager.register('endgameMap', new EndgameMapScene());
 sceneManager.register('endgame', new EndgameScene());
+sceneManager.register('room', new RoomScene());
+sceneManager.register('versus', new VersusScene());
 
 // ---- 读设置并应用副作用（setEnabled / setReduceMotion / 字号 / SceneManager.reduceMotion）----
 GameContext.loadSettings();
@@ -233,8 +237,94 @@ function maybeCloudSyncOnShow() {
   }
 }
 
+// ==================== 分享卡片 query + 房间生命周期接线（远程对弈）====================
+// 全部 wx 调用能力防御 + try/catch；核心模块可能尚未落盘，一律惰性防御式 require。
+// 绝不引入 wx.request / wx.login / getUserProfile / scope.userInfo。
+let _roomCore = null;
+function getRoomCore() {
+  if (_roomCore) return _roomCore;
+  try { _roomCore = require('./src/core/room'); } catch (e) { _roomCore = null; }
+  return _roomCore;
+}
+
+/** 从启动参数 / onShow 回调里取合法 6 位数字房间码，非法或缺省返回 ''。 */
+function readRoomFromQuery(opts) {
+  try {
+    const q = opts && opts.query;
+    if (!q || typeof q !== 'object') return '';
+    const v = q.room;
+    if (typeof v !== 'string') return '';
+    return /^\d{6}$/.test(v) ? v : '';
+  } catch (e) { return ''; }
+}
+
+// 去重：同一 query 重复 onShow 不反复重进（记录上一次 code + 时间戳，并比对当前房间 scene 的 joinCode）。
+let _lastShareCode = '';
+let _lastShareAt = 0;
+const SHARE_ROUTE_MIN_GAP_MS = 3000;
+
+/** 冷启动 / 热启动共用：合法 room query → switchTo('room', {from:'share', joinCode})。 */
+function routeShareQuery(res) {
+  const code = readRoomFromQuery(res);
+  if (!code) return false;
+  const nowMs = Date.now();
+  if (code === _lastShareCode && (nowMs - _lastShareAt) < SHARE_ROUTE_MIN_GAP_MS) return false;
+  const sc = sceneManager.currentScene;
+  if (sceneManager.currentSceneName === 'room' && sc && sc.joinCode === code) {
+    _lastShareCode = code; _lastShareAt = nowMs; return false;
+  }
+  _lastShareCode = code;
+  _lastShareAt = nowMs;
+  try {
+    GameContext.emit('navigate', { to: 'room' });
+    sceneManager.switchTo('room', { from: 'share', joinCode: code });
+  } catch (e) { /* 静默降级 */ }
+  return true;
+}
+
+/** 房间生命周期：onHide/onShow 调 room 核心的 onBackground/onForeground（缺失静默）。 */
+function callRoomLifecycle(name) {
+  try {
+    const rm = getRoomCore();
+    if (rm && typeof rm[name] === 'function') rm[name]();
+  } catch (e) { /* 静默降级 */ }
+}
+
+/** 默认分享卡片：有房间时带上 6 位房间码，无房间时 query 给空串。 */
+function setupShareMenu() {
+  try {
+    if (typeof wx === 'undefined') return;
+    if (typeof wx.showShareMenu === 'function') {
+      wx.showShareMenu({ withShareTicket: false });
+    }
+    if (typeof wx.onShareAppMessage === 'function') {
+      wx.onShareAppMessage(function () {
+        let rid = '';
+        try {
+          const rm = getRoomCore();
+          if (rm && typeof rm.getState === 'function') {
+            const st = rm.getState();
+            rid = (st && st.roomId) || '';
+          }
+        } catch (e) { rid = ''; }
+        return { title: '墨金棋院 · 来下一局', query: rid ? ('room=' + rid) : '' };
+      });
+    }
+  } catch (e) { /* 静默降级 */ }
+}
+
 // ---- 启动主菜单 ----
 sceneManager.switchTo('menu');
+
+// 冷启动：getLaunchOptionsSync().query.room 为合法 6 位数字时直达房间（加入态）
+(function coldStartShareRoute() {
+  try {
+    if (typeof wx !== 'undefined' && typeof wx.getLaunchOptionsSync === 'function') {
+      routeShareQuery(wx.getLaunchOptionsSync());
+    }
+  } catch (e) { /* 能力缺失 / 异常静默降级，不影响菜单 */ }
+})();
+setupShareMenu();
 
 // ==================== 游戏主循环 ====================
 let lastTime = Date.now();
@@ -288,15 +378,21 @@ if (typeof wx.onHide === 'function') {
     if (sceneManager.currentSceneName === 'gameplay' && _cs && typeof _cs.saveResumeSnapshot === 'function') {
       try { _cs.saveResumeSnapshot(); } catch (e) {}
     }
+    // 房间生命周期：进入后台（不改动上方音频/动画/回放/断点逻辑）
+    callRoomLifecycle('onBackground');
   });
 }
 if (typeof wx.onShow === 'function') {
-  wx.onShow(function () {
+  wx.onShow(function (res) {
     lastTime = Date.now(); // 重置时间基准，避免回到前台 dt 突增
     // P2 断点恢复：若有 resume 快照且当前在菜单，弹 M7 询问（stretch）
     tryOfferResume();
     // 云同步（节流；不重复 sync.init；授权就绪且首次 pull 未完成时补做全量 pull）
     maybeCloudSyncOnShow();
+    // 房间生命周期：回到前台（缺失静默）
+    callRoomLifecycle('onForeground');
+    // 热启动（分享卡片点进）：合法 room query 路由到房间加入态（含重复 onShow 去重）
+    routeShareQuery(res);
   });
 }
 

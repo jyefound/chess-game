@@ -40,11 +40,35 @@
       },
       {
         "type": "file",
+        "value": "test-room.js"
+      },
+      {
+        "type": "file",
         "value": "test-cloud.js"
       },
       {
         "type": "file",
         "value": "test-sync.js"
+      },
+      {
+        "type": "file",
+        "value": "test-recovery.js"
+      },
+      {
+        "type": "file",
+        "value": "tmp-shots.js"
+      },
+      {
+        "type": "file",
+        "value": "tmp-verify-audio.js"
+      },
+      {
+        "type": "file",
+        "value": "tmp-verify-coach.js"
+      },
+      {
+        "type": "file",
+        "value": "tmp-verify-hit.js"
       },
       {
         "type": "file",

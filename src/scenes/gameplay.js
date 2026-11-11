@@ -32,6 +32,23 @@ const boardRender = require('../render/board');
 const piecesRender = require('../render/pieces');
 const SettingsModule = require('./settings');
 
+// 远程双人对弈房间模块：由并行 worker 实现，Node 回归时可能尚未落盘 / 无 wx.cloud，
+// 故防御式引入；所有调用点一律以 `room && typeof room.xxx === 'function'` 守卫，绝不因此抛异常。
+let room = null;
+try { room = require('../core/room'); } catch (e) { room = null; }
+
+// 房间配置 / 结算结果枚举：统一读 config（场景层禁止裸写结果字符串）。
+// config.ROOM_CONFIG / config.ROOM_RESULT 由 config worker 落盘；缺失时用等价兜底常量，
+// 保证「协议层未就绪」时场景依旧可判定、可降级，绝不抛异常。
+let CONFIG = {};
+try { CONFIG = require('../config'); } catch (e) { CONFIG = {}; }
+const ROOM_CFG = CONFIG.ROOM_CONFIG || {};
+const ROOM_RESULT = Object.assign({
+  materialWhite: 'material_white_win', materialBlack: 'material_black_win',
+  draw: 'draw', abandoned: 'abandoned', archived: 'archived',
+  resignWhite: 'resign_white', resignBlack: 'resign_black'
+}, CONFIG.ROOM_RESULT || {});
+
 // ==================== V2 §2 指导模式 / 提示功能常量 ====================
 // 提示分帧搜索：预算（easy/medium/hard）与教练固定值（§2.2）
 const HINT_BUDGET = { easy: 1200, medium: 1800, hard: 2500 };
@@ -149,6 +166,26 @@ class GameplayScene {
     this.pressed = null;
     this.pressedCell = null;
     this.shakeUntil = 0;     // 非法落点反馈：棋盘左右轻颤的截止时间戳（ms）
+    // ===== 远程双人对弈（mode:'remote'）状态 =====
+    this.roomId = ''; this.roomSeat = ''; this.roomRole = '';
+    this.remoteRev = 0; this.remoteStatus = 'playing';
+    this.applyingRemote = false; this.roomConfig = {};
+    // ===== 远程退出仲裁 / 结束判定 / 棋谱（v5.1）状态 =====
+    this.roomDoc = null;              // 最新房间快照（供 update 墙钟判定 / 昵称读取）
+    this.remoteOpponentNick = '';     // 对端昵称（host 读 guestNick / guest 读 hostNick）
+    this.remoteLeft = null;           // {role:'host'|'guest', color:'w'|'b', at, waitingSince} 对端退出信息
+    this.remoteBothLeft = false;      // 双方均退出
+    this.arbitrationOpen = false;     // 仲裁弹窗是否已开（防重复弹）
+    this.arbitrationPrompted = false; // 1 分钟超时是否已提示过（同一轮只提示一次）
+    this.arbitrationWaiting = false;  // 用户已选「继续等待」
+    this.remoteAbandonDeadline = 0;   // 双方均退出时的 keepUntil
+    this._heartbeatTimer = null;      // 在线心跳 setInterval 句柄
+    this._arbitrationRegion = null;   // HUD「对手已离开 · 处理」命中区
+    this._abandonArchived = false;    // 双方均退出超时封存只做一次
+    this._bothLeftMarked = false;     // 双方均退出时本端已调过 room.markBothLeft()（避免每帧重复写）
+    this._prevOppLeft = false;        // 对端上一帧的退出态（边沿检测，用于重置 arbitrationPrompted）
+    this._archivedShown = false;      // archived 快照只呈现一次结算态
+    this._abandonedShown = false;     // abandoned 快照只提示一次
     this.toolbarRegions = [];
     this.backRegion = null;
     this.modalRegions = [];
@@ -184,9 +221,26 @@ class GameplayScene {
     this.coach = !!(params.coach || params.style === 'coach');
     this.aiDepth = params.aiDepth || (this.coach ? theme.aiDepth.easy : theme.aiDepth.medium);
     this.aiColor = params.aiColor || COLOR.BLACK;
-    this.playerColor = params.playerColor || (this.mode === 'ai'
-      ? (this.aiColor === COLOR.WHITE ? COLOR.BLACK : COLOR.WHITE) : COLOR.WHITE);
-    this.flipBoard = params.flip != null ? !!params.flip : (this.mode === 'ai' && this.playerColor === COLOR.BLACK);
+    // 执子色：远程由房间分配（params.playerColor）；人机保持原反推逻辑；本地双人默认白方先行。
+    // 保留 params.playerColor 最高优先，确保 ai / local 既有行为零回归。
+    this.playerColor = (this.mode === 'ai')
+      ? (params.playerColor || (this.aiColor === COLOR.WHITE ? COLOR.BLACK : COLOR.WHITE))
+      : (params.playerColor || COLOR.WHITE);
+    // 默认朝向：人机 / 远程各自「执黑则翻转」（远程各自固定看自己执棋色在屏幕底部）；
+    // 本地双人全程固定，默认读持久化的 defaultOrientation（'white' → 白在屏幕下方 = false）。
+    // params.flip 保留最高优先级，供断点 / 未来扩展使用。
+    let defaultFlip = false;
+    if (this.mode === 'ai' || this.mode === 'remote') {
+      defaultFlip = (this.playerColor === COLOR.BLACK);
+    } else {
+      let orient = 'white';
+      try {
+        const s = GameContext.getSettings();
+        if (s && s.defaultOrientation === 'black') orient = 'black';
+      } catch (e) { orient = 'white'; }
+      defaultFlip = (orient === 'black');
+    }
+    this.flipBoard = params.flip != null ? !!params.flip : defaultFlip;
     this.state = 'IDLE';
     this.selected = null; this.legalMoves = []; this.lastMove = null;
     this.aiCtx = null; this.thinkPhase = 0; this.thinkLead = 0;
@@ -200,6 +254,25 @@ class GameplayScene {
     this.toolbarRegions = []; this.modalRegions = [];
     this.settingsScrollY = 0; this.settingsMaxScroll = 0;
     this.timeMs = 0;
+    // 退出仲裁 / 心跳 / 远程快照缓存：每次进入都重置，避免沿用上一局的退出态或泄漏定时器。
+    if (this._heartbeatTimer) {
+      try { clearInterval(this._heartbeatTimer); } catch (e) { /* noop */ }
+    }
+    this._heartbeatTimer = null;
+    this.roomDoc = null;
+    this.remoteOpponentNick = '';
+    this.remoteLeft = null;
+    this.remoteBothLeft = false;
+    this.arbitrationOpen = false;
+    this.arbitrationPrompted = false;
+    this.arbitrationWaiting = false;
+    this.remoteAbandonDeadline = 0;
+    this._arbitrationRegion = null;
+    this._abandonArchived = false;
+    this._bothLeftMarked = false;
+    this._prevOppLeft = false;
+    this._archivedShown = false;
+    this._abandonedShown = false;
     // 指导模式：点评统计归零 + 开局气泡（教练陪练中）
     this.coachQueue = [];
     this.coachBubble = null;
@@ -215,23 +288,124 @@ class GameplayScene {
     this.hintRegions = [];
     this.guard.reset();
     this.layout();
-    // P2 断点恢复：重放 UCI 列表并重建 lastMove / captured，再按当前轮次决定状态
-    if (Array.isArray(params.resumeMoves) && params.resumeMoves.length) {
+
+    // 本地双人棋盘方向全程固定：不随落子 / 回合 / 悔棋翻转；
+    // 仅用户在「更多」抽屉手动调转时改变（并持久化到 defaultOrientation）。
+    // 远程双人对弈同样固定视角（各自设备单视角），由 flipBoard 初始化一次后不再变动。
+
+    // ===== 远程双人对弈（mode:'remote'）初始化 =====
+    this.roomId = ''; this.roomSeat = ''; this.roomRole = '';
+    this.remoteRev = 0; this.remoteStatus = 'playing';
+    this.applyingRemote = false;
+    if (this.mode === 'remote') {
+      this.roomId = params.roomId || '';
+      this.roomSeat = params.seat || '';
+      this.roomRole = params.role || '';
+      this.remoteStatus = 'playing';
+      // v5 重新加入（params.rejoin）：不重置房间态，初始着法沿用下方 params.movesUci /
+      // room.getState().movesUci 的现有重放逻辑（:319-322 已覆盖，勿重复造）；
+      // 仅确保退出仲裁相关状态为干净态，让重新加入后按最新快照重新判定。
+      if (params.rejoin) {
+        this.remoteLeft = null;
+        this.remoteBothLeft = false;
+        this.arbitrationOpen = false;
+        this.arbitrationPrompted = false;
+        this.arbitrationWaiting = false;
+        this.remoteAbandonDeadline = 0;
+      }
+      // aiColor 保持默认，但现有 AI 触发点全部带 mode==='ai' 门控，远程不会触发任何 AI 分支。
+      // 防御式读取房间配置（由并行 worker 落盘，可能尚未就绪 → 空对象兜底）。
+      let RC = {};
+      try { const config = require('../config'); RC = config.ROOM_CONFIG || {}; } catch (e) { RC = {}; }
+      this.roomConfig = RC;
+      // 同步读一次房间本地权威态，作为 remoteRev 的展示 / 调试初值。
+      // 导航契约不传 rev，joinRoom 后房间 rev=1、createRoom 后 rev=0；room 模块的
+      // _deliver 按 rev 去重会丢弃 guest 的初始快照，不能依赖异步快照补齐。
+      // 注意：pushMove 的 CAS 期望值在 pushRemoteMove() 里另取 room.getState().rev（唯一权威源），
+      // this.remoteRev 仅作展示，不作 CAS 入参。
+      let rs = null;
+      if (room && typeof room.getState === 'function') {
+        try { rs = room.getState(); } catch (e) { rs = null; }
+      }
+      let initialRev = 0;
+      if (rs && typeof rs.rev === 'number' && rs.rev >= 0) initialRev = rs.rev;
+      this.remoteRev = initialRev;
+      // 首帧快照可能迟到：先从房间本地权威态取一次对端昵称（host 读 guestNick / guest 读 hostNick）。
+      if (rs) {
+        const nick = this.roomRole === 'host' ? rs.guestNick : rs.hostNick;
+        this.remoteOpponentNick = (typeof nick === 'string' && nick) ? nick : '';
+      }
+      // 初始着法：导航 params 优先，房间本地态兜底（断线重进）；复用 UCI 重放重建局面。
+      let initialMoves = Array.isArray(params.movesUci) ? params.movesUci : [];
+      if (!initialMoves.length && rs && Array.isArray(rs.movesUci) && rs.movesUci.length) initialMoves = rs.movesUci;
+      if (initialMoves.length) this.restoreFromMoves(initialMoves);
+      // 订阅房间快照；返回 false 不弹错，交由 room 模块内建轮询兜底。
+      if (room && typeof room.watchRoom === 'function') {
+        try {
+          room.watchRoom(this.roomId, {
+            onSnapshot: (doc) => this.onRemoteSnapshot(doc),
+            onError: (reason) => this.onRemoteError(reason)
+          });
+        } catch (e) { /* 订阅失败由轮询兜底，不崩溃 */ }
+      }
+      let available = false;
+      try { available = !!(room && typeof room.isAvailable === 'function' && room.isAvailable()); }
+      catch (e) { available = false; }
+      if (!available) {
+        try { GameContext.showBanner('联机能力不可用，已转为本地查看', 'danger'); } catch (e) { /* noop */ }
+      }
+      // v5 在线心跳：进入 remote 对局后周期性上报 present/onlineAt。定时器句柄存 _heartbeatTimer，
+      // 由 enter() 开头与 exit() 统一 clearInterval 清理，绝不泄漏；协议层未提供 heartbeat 时不启动。
+      if (room && typeof room.heartbeat === 'function') {
+        const hbMs = (typeof ROOM_CFG.presenceIntervalMs === 'number' && ROOM_CFG.presenceIntervalMs > 0)
+          ? ROOM_CFG.presenceIntervalMs : 10000;
+        this._heartbeatTimer = setInterval(() => {
+          if (room && typeof room.heartbeat === 'function') {
+            try {
+              const p = room.heartbeat();
+              if (p && typeof p.catch === 'function') p.catch(() => { /* noop */ });
+            } catch (e) { /* noop */ }
+          }
+        }, hbMs);
+      }
+    }
+
+    // P2 断点恢复：重放 UCI 列表并重建 lastMove / captured（远程走上方房间重放，不用个人断点）。
+    if (this.mode !== 'remote' && Array.isArray(params.resumeMoves) && params.resumeMoves.length) {
       this.restoreFromMoves(params.resumeMoves);
     } else if (this.mode === 'ai' && this.game.turn === this.aiColor) {
       // 玩家选黑：AI 执白先手，进入后自动触发（现有代码缺失）
       this.startAIThinking();
     }
-    // 双人对弈：当前走子方始终在屏幕底部（近端玩家视角），每步随 sideToMove 翻转（§5）。
-    // 初始白先走 → 白在底（flipBoard=false）；轮到黑走 → 黑在底（flipBoard=true）。
-    if (this.mode === 'local') this.flipBoard = (this.game.turn === COLOR.BLACK);
     if (this.coach && !(Array.isArray(params.resumeMoves) && params.resumeMoves.length)) {
       // 开局：一句开场白（教练身份 = AI 一方）
       const mine = this.aiColor === COLOR.WHITE ? '白' : '黑';
       this.sayCoach(`这局我执${mine}，慢慢来，先看清中心。`, 'coachSay');
     }
   }
-  exit() { this.toolbarRegions = []; this.modalRegions = []; this.aiCtx = null; }
+  exit() {
+    this.toolbarRegions = []; this.modalRegions = []; this.aiCtx = null;
+    // v5：清理在线心跳定时器（enter 会再启一个，若不清理会泄漏并重复上报）。
+    if (this._heartbeatTimer) {
+      try { clearInterval(this._heartbeatTimer); } catch (e) { /* noop */ }
+      this._heartbeatTimer = null;
+    }
+    if (this.mode !== 'remote') return;
+    // 远程对弈：停止订阅；房间状态由 room 场景管理，finished 房间不应在此被删除（不调 leaveRoom）。
+    if (room && typeof room.stopWatch === 'function') {
+      try { room.stopWatch(); } catch (e) { /* noop */ }
+    }
+    // v5：标记本方退出（present=false + leftAt=now），保留席位供「重新加入」。
+    // 退出对局 ≠ 离开房间：markLeft 不清 room 模块的本地权威态（协议层负责），
+    // 玩家回菜单后 readLocalRoom()/rejoinEntry() 仍能读回 {roomId,seat,role}。
+    // fire-and-forget：不 await、不阻塞退出流程；协议层未落盘时由守卫降级。
+    if (room && typeof room.markLeft === 'function') {
+      try {
+        const p = room.markLeft();
+        if (p && typeof p.catch === 'function') p.catch(() => { /* noop */ });
+      } catch (e) { /* noop */ }
+    }
+  }
 
   /** 从 UCI 列表重建局面（断点恢复）；跨步直接重放，不做动画。 */
   restoreFromMoves(uciList) {
@@ -249,7 +423,7 @@ class GameplayScene {
       applied++;
     }
     // P1-I3：若恢复步数与快照不符（如规则版本更新使旧快照失效），丢弃断点，避免脏状态被反复重放。
-    if (applied !== uciList.length) { GameContext.clearResume(); this.state = 'IDLE'; return; }
+    if (applied !== uciList.length) { if (this.mode !== 'remote') GameContext.clearResume(); this.state = 'IDLE'; return; }
     const st = this.game.getStatus();
     if (st.result) { this.onGameOver(); return; }
     if (this.mode === 'ai' && st.turn === this.aiColor) this.startAIThinking();
@@ -258,6 +432,8 @@ class GameplayScene {
 
   /** 保存断点快照（供 onShow M7 询问）；仅进行中且不设自动存档依赖时写。 */
   saveResumeSnapshot() {
+    // 远程对弈不写个人断点（两端状态以房间文档为准，避免污染个人进度同步）。
+    if (this.mode === 'remote') return;
     const st = this.game.getStatus();
     if (st.result || st.movesUci.length < 1) return;
     GameContext.saveResume({
@@ -625,6 +801,9 @@ class GameplayScene {
         if (this.coachQueue.length) this.nextCoachBubble();
       }
     }
+
+    // v5 远程退出仲裁：用墙钟判定（update 的帧累加切后台即停，不能用于云端退出计时）。
+    this._updateArbitration();
   }
 
   // ==================== 渲染 ====================
@@ -665,7 +844,9 @@ class GameplayScene {
     this.backRegion = { x: 12, y: n.y + (n.h - 44) / 2, w: bw, h: 44 };
     ctx.fillStyle = C.textSecondary; ctx.font = TF('caption');
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const label = this.mode === 'ai' ? `人机对战 · ${this.difficultyName()}` : '双人对弈';
+    const label = this.mode === 'ai' ? `人机对战 · ${this.difficultyName()}`
+      : this.mode === 'remote' ? `远程对弈 · 执${this.playerColor === COLOR.WHITE ? '白' : '黑'}`
+      : '双人对弈';
     ctx.fillText(label, W / 2, n.y + n.h / 2);
   }
 
@@ -712,11 +893,24 @@ class GameplayScene {
     ctx.moveTo(cx + centerW / 2, bar.y + 11); ctx.lineTo(cx + centerW / 2, bar.y + bar.h - 11);
     ctx.stroke();
     const inCheck = !!(st.inCheck && !st.result);
+    const yourTurn = this.mode === 'remote' && st.turn === this.playerColor;
+    const bothLeft = this.mode === 'remote' && this.remoteBothLeft;
+    const oppLeft = this.mode === 'remote' && this.remoteLeft;
+    // v5：对端退出 → 中缝改为可点击的常驻仲裁入口；双方均退出 → 显示房间保留倒计时。
+    const midLabel = inCheck ? '将军'
+      : bothLeft ? '双方已离开'
+      : oppLeft ? (this.arbitrationWaiting ? '等待中 · 处理' : '对手已离开 · 处理')
+      : this.mode === 'remote' ? (yourTurn ? '轮到你' : '等待对手')
+      : '用时';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = inCheck ? C.danger : C.disabledFg; ctx.font = TF('micro');
-    ctx.fillText(inCheck ? '将军' : '用时', cx, bar.y + 15);
+    ctx.fillStyle = inCheck ? C.danger : (yourTurn ? C.accent : C.disabledFg); ctx.font = TF('micro');
+    ctx.fillText(fitText(ctx, midLabel, centerW - 4), cx, bar.y + 15);
+    const subLabel = bothLeft ? ('保留 ' + this._abandonCountdownText()) : this.elapsedText();
     ctx.fillStyle = inCheck ? C.danger : C.textSecondary; ctx.font = TF('san');
-    ctx.fillText(this.elapsedText(), cx, bar.y + 31);
+    ctx.fillText(fitText(ctx, subLabel, centerW - 4), cx, bar.y + 31);
+    // 常驻仲裁入口命中区：对端退出（且非双方均退出）时中缝可点击再次打开仲裁面板。
+    this._arbitrationRegion = (oppLeft && !bothLeft)
+      ? { x: cx - centerW / 2, y: bar.y, w: centerW, h: bar.h } : null;
     ctx.restore();
   }
 
@@ -794,6 +988,7 @@ class GameplayScene {
       lastMove: this.lastMove,
       checkPos: st.inCheck ? this.game.board.findKing(this.game.turn) : null,
       flip: this.flipBoard,
+      topPiecesUpsideDown: this.mode === 'local', // 仅本地双人：屏幕上半区棋子旋转 180° 朝上
       showCoordinates: !!settings.showCoordinates,
       time: this.timeMs,             // 累计毫秒，驱动脉冲相位（C4）
       reduceMotion: reduce,
@@ -806,7 +1001,9 @@ class GameplayScene {
       const from = this.cellToScreen(this.anim.move.fromRow, this.anim.move.fromCol);
       const to = this.cellToScreen(this.anim.move.toRow, this.anim.move.toCol);
       const px = from.x + (to.x - from.x) * t, py = from.y + (to.y - from.y) * t;
-      piecesRender.drawPieceWithShadow(ctx, this.anim.pieceType, this.anim.pieceColor, px, py, this.cellSize);
+      // 按目标格屏幕位置判定上半区（固定判定，跨中线时不闪烁突变）；仅本地双人旋转。
+      const flyOpts = { rotate180: this.mode === 'local' && to.y < this.boardY + this.boardSize / 2 };
+      piecesRender.drawPieceWithShadow(ctx, this.anim.pieceType, this.anim.pieceColor, px, py, this.cellSize, flyOpts);
     }
     // 落定尘埃环
     if (this.landRing) {
@@ -823,7 +1020,9 @@ class GameplayScene {
       const piece = this.game.board.getPiece(this.selected.row, this.selected.col);
       if (piece) {
         ctx.save(); ctx.globalAlpha = 0.5;
-        piecesRender.drawPieceWithShadow(ctx, piece.type, piece.color, p.x, p.y, this.cellSize);
+        // 按预览格屏幕位置判定上半区；保持原有 alpha 与阴影行为，仅叠加 rotate180。
+        const previewOpts = { rotate180: this.mode === 'local' && p.y < this.boardY + this.boardSize / 2 };
+        piecesRender.drawPieceWithShadow(ctx, piece.type, piece.color, p.x, p.y, this.cellSize, previewOpts);
         ctx.restore();
       }
       ctx.strokeStyle = C.hlSelectedRing; ctx.lineWidth = 2;
@@ -1000,7 +1199,8 @@ class GameplayScene {
     const barX = (typeof this._toolbarBarX === 'number') ? this._toolbarBarX : 0;
     const cw = barW / items.length;
     const canUndo = this.game.history.length > 0 &&
-      ['IDLE', 'SELECTED', 'GAMEOVER'].indexOf(this.state) >= 0;
+      ['IDLE', 'SELECTED', 'GAMEOVER'].indexOf(this.state) >= 0 &&
+      this.mode !== 'remote';   // 联机对局禁止单方悔棋（两端一致）
     const busy = ['ANIMATING', 'AI_THINKING', 'PROMOTION'].indexOf(this.state) >= 0;
     // 锦囊提示：常规人机每局 3 次（用完置灰）；指导模式无限免费
     const hintUsable = !busy && this.state !== 'GAMEOVER' &&
@@ -1083,8 +1283,11 @@ class GameplayScene {
     const accColor = r === 'draw' ? C.textPrimary : (p.outcome === 'loss' ? C.danger : C.success);
     ctx.fillStyle = accColor; ctx.font = TF('h1'); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillText(title, W / 2, dy + 26);
-    // C2：本地双人 outcome 恒为 win、无「你」这个人称，中性表述避免与「黑方获胜！」自相矛盾
-    const perspective = this.mode !== 'ai' && r !== 'draw' ? '本局结束'
+    // C2：本地双人 outcome 恒为 win、无「你」这个人称，中性表述避免与「黑方获胜！」自相矛盾。
+    // 远程对弈与 ai 一致按 outcome 显示「你赢了 / 你输了 / 平局」，两端基于同一 result 得到一致文案。
+    // v5：封存残局不判成绩，perspective 固定为「残局已封存 · 不判成绩」。
+    const perspective = this.remoteStatus === 'archived' ? '残局已封存 · 不判成绩'
+      : this.mode === 'local' && r !== 'draw' ? '本局结束'
       : p.outcome === 'win' ? '你赢了' : p.outcome === 'loss' ? '你输了' : '平局';
     ctx.fillStyle = C.textPrimary; ctx.font = TF('subtitle');
     ctx.fillText(perspective, W / 2, dy + 62);
@@ -1109,7 +1312,9 @@ class GameplayScene {
     drawBtn(ctx, dx + pad + bw + gap, by, bw, bh, '返回菜单', 'secondary', { pressed: this.tap.isPressing('menu', Date.now()) });
     pushRegion('again', dx + pad, by, bw, bh);
     pushRegion('menu', dx + pad + bw + gap, by, bw, bh);
-    // 第三行：查看棋谱 / 保存本局 + 悔棋继续（文字按钮；A 删除与首字重叠的 chevron）
+    // 第三行：查看棋谱 / 保存本局 + 悔棋继续（文字按钮；A 删除与首字重叠的 chevron）。
+    // v5.1：远程对弈同样写入本地棋谱，恢复「查看棋谱 / 保存本局」两个入口；
+    // 仅「悔棋继续」在 remote 下隐藏（doUndo 对 remote 直接 return，避免死链）。
     const ly = by + bh + 24;   // 主按钮底 by+48 → 第三行命中顶 by+60，间隔 12pt，消除误触
     const off = 64;
     const rxL = W / 2 - off - 55, rxR = W / 2 + off - 55, ry = ly - 12, rw = 110, rh = 44;
@@ -1126,10 +1331,12 @@ class GameplayScene {
       ctx.fillStyle = on ? C.accent : C.textPrimary; ctx.fillText('保存本局', W / 2 - off, ly + 10);
       pushRegion('save', rxL, ry, rw, rh);
     }
-    const undoOn = this.tap.isPressing('undo', Date.now());
-    util.drawTapHighlight(ctx, rxR, ry, rw, rh, undoOn, R.sm);
-    ctx.fillStyle = undoOn ? C.accent : C.textPrimary; ctx.fillText('悔棋继续', W / 2 + off, ly + 10);
-    pushRegion('undo', rxR, ry, rw, rh);
+    if (this.mode !== 'remote') {
+      const undoOn = this.tap.isPressing('undo', Date.now());
+      util.drawTapHighlight(ctx, rxR, ry, rw, rh, undoOn, R.sm);
+      ctx.fillStyle = undoOn ? C.accent : C.textPrimary; ctx.fillText('悔棋继续', W / 2 + off, ly + 10);
+      pushRegion('undo', rxR, ry, rw, rh);
+    }
     ctx.restore();
   }
 
@@ -1144,12 +1351,18 @@ class GameplayScene {
     const items = [
       { key: 'settings', label: '设置' },
       { key: 'save', label: '保存进度', disabled: busy },
-      { key: 'flip', label: `翻转棋盘（当前${this.flipBoard ? '已翻转' : '未翻转'}）` },
+      { key: 'flip', label: `翻转棋盘（当前${this.flipBoard ? '已翻转' : '未翻转'}·本局保持）` },
       { key: 'rules', label: '基本规则' },
       { key: 'copy', label: '复制棋谱' },
       { key: 'resign', label: '认输', danger: true },
       { key: 'menu', label: '返回菜单' }
     ];
+    // 远程对弈：房间协议暂无认输同步能力，隐藏单方认输以免两端结束态不一致；
+    // v5：补「结束对弈（按兵力判定）」常驻入口，走二次确认 + judgeByMaterial 流程。
+    if (this.mode === 'remote') {
+      for (let i = items.length - 1; i >= 0; i--) if (items[i].key === 'resign') items.splice(i, 1);
+      items.splice(items.length - 1, 0, { key: 'abort', label: '结束对弈（按兵力判定）', danger: true });
+    }
     const rowH = 44, gap = 6, rx = 24, rw = W - 48;
     const sh = 74 + items.length * (rowH + gap) + 6;
     const sy = Math.max(_navTop + 8, H - sh - _safeB);
@@ -1248,6 +1461,11 @@ class GameplayScene {
 
     if (!this.tap.guard(Date.now())) return; // 90ms 全局防穿透（Phase 3·12 统一）
     GameContext.emit('tap');
+    // v5 常驻仲裁入口（HUD 中缝「对手已离开 · 处理」）：点击再次打开三选项面板。
+    if (this._arbitrationRegion && inRect(x, y, this._arbitrationRegion)) {
+      if (!this.tap.guard(Date.now(), 'arbitration')) return;
+      this.openArbitrationModal(); return;
+    }
     // 返回
     if (this.backRegion && inRect(x, y, this.backRegion)) {
       if (!this.tap.guard(Date.now(), 'back')) return;
@@ -1322,11 +1540,12 @@ class GameplayScene {
       // 设置 / 保存进度：调用原有 action（不新增逻辑，仅改入口）
       if (r.key === 'settings') { GameContext.closeModal(); GameContext.openModal('settingsDrawer', {}); return; }
       if (r.key === 'save') { GameContext.closeModal(); this.manualSave(); return; }
-      if (r.key === 'flip') { this.flipBoard = !this.flipBoard; GameContext.closeModal(); }
+      if (r.key === 'flip') { this.toggleBoardFlip(); }
       else if (r.key === 'rules') { this.openRules(); }
       else if (r.key === 'copy') { this.copyRecord(); GameContext.closeModal(); }
       else if (r.key === 'menu') { GameContext.closeModal(); this.requestLeave(); }
       else if (r.key === 'resign') { this.confirmResign(); }
+      else if (r.key === 'abort') { this.confirmFinishByMaterial(); }  // 内部先 close 再弹二次确认
       return;
     }
     if (mc === 'settingsDrawer') {
@@ -1354,6 +1573,12 @@ class GameplayScene {
   handleBoardTouch(x, y) {
     if (this.state !== 'IDLE' && this.state !== 'SELECTED') return; // 输入锁
     if (this.mode === 'ai' && this.game.turn === this.aiColor) return;
+    // 远程对弈：只在自己回合、房间未结束时允许落子（不允许替对手走）。
+    if (this.mode === 'remote' && this.remoteStatus === 'finished') return;
+    if (this.mode === 'remote' && this.game.turn !== this.playerColor) {
+      try { GameContext.showBanner('等待对手落子', 'info'); } catch (e) { /* noop */ }
+      return;
+    }
     const pos = this.screenToBoard(x, y);
     if (!pos) { this.selected = null; this.legalMoves = []; this.state = 'IDLE'; return; }
     const { row, col } = pos;
@@ -1416,8 +1641,9 @@ class GameplayScene {
     if (!ok) { this.state = (this.mode === 'ai' && this.game.turn === this.aiColor) ? 'AI_THINKING' : 'IDLE'; return; }
     this.lastMove = { fromRow: move.fromRow, fromCol: move.fromCol, toRow: move.toRow, toCol: move.toCol };
     this.selected = null; this.legalMoves = [];
-    // 双人对弈：走子后 sideToMove 已切换，让新的走子方翻到屏幕底部（§5）
-    if (this.mode === 'local') this.flipBoard = (this.game.turn === COLOR.BLACK);
+    // 本地双人 / 远程方向全程固定：走子后不再按 sideToMove 翻转（仅「更多」抽屉手动调转）。
+    // 远程对弈：把刚落的一步异步推到房间，不 await、不阻塞 UI、不改本地已落子的棋盘。
+    if (this.mode === 'remote') this.pushRemoteMove();
     if (this.sm.modal.current === 'promotion') this.sm.modal.close();
     if (capturedBefore) this.captured[moverColor].push(capturedBefore.type);
     if (wasCapture) GameContext.emit('capture'); else GameContext.emit('move');
@@ -1489,24 +1715,40 @@ class GameplayScene {
   onGameOver() {
     this.state = 'GAMEOVER';
     this.selected = null; this.legalMoves = [];
-    // 对局已结束：清除断点快照，避免下次 onShow 误弹「继续上一局」
-    if (GameContext.clearResume) GameContext.clearResume();
+    // 对局已结束：清除断点快照（远程对局不写个人断点，也不清其它模式的断点，隔离个人进度通道）
+    if (this.mode !== 'remote' && GameContext.clearResume) GameContext.clearResume();
     const st = this.game.getStatus();
     const winner = st.result === 'white_win' ? 'w' : st.result === 'black_win' ? 'b' : null;
     let outcome = 'draw';
     if (st.result && st.result !== 'draw') {
-      outcome = this.mode === 'ai' ? (winner === this.playerColor ? 'win' : 'loss') : 'win';
+      // 人机 / 远程按自己执棋色判定胜负；本地双人恒为 win（共享屏、无人称，中性文案）。
+      outcome = this.mode === 'local' ? 'win' : (winner === this.playerColor ? 'win' : 'loss');
     }
     this._lastOutcome = outcome;
     GameContext.emit('win', { outcome });
     const settings = GameContext.getSettings();
-    // 自动存档：失败/满额时不弹阻塞模态（避免被随后打开的结算 M2 关掉），改用 Banner +「保存本局」兜底
+    // 自动存档：失败/满额时不弹阻塞模态（避免被随后打开的结算 M2 关掉），改用 Banner +「保存本局」兜底。
+    // v5.1：远程对弈同样写入本地棋谱（对手昵称/模式三态由 buildRecord 提供），两端可各自留存；
+    // 远程仍不写「个人断点快照」（saveResumeSnapshot 对 remote 直接 return），个人进度通道保持隔离。
+    // persistRecord() 成功时会设置 this.savedGameId，供结算模态「查看棋谱」入口使用。
     if (settings.autoSaveGame && st.movesUci.length >= 1 && !this.autoSavedThisResult) {
       this.autoSavedThisResult = true;
       const status = this.persistRecord(this.buildRecord(true));
       if (status === 'saved') GameContext.showBanner('结算已自动存档', 'success');
       else if (status === 'full') GameContext.showBanner('棋谱已满，请手动保存', 'warning');
       else { GameContext.emit('uiError'); GameContext.showBanner('自动保存失败，请手动保存', 'danger'); }
+    }
+    // v5：房主按本局结果记录一局比分。result 用 ROOM_RESULT 标签（正常将杀也复用 material* 标签）；
+    // 协议层用 gamesPlayed CAS 保证幂等（重复调用返回 already_recorded），故本地不加去重标记。
+    if (this.mode === 'remote' && this.roomRole === 'host') {
+      const rr = st.result === 'white_win' ? ROOM_RESULT.materialWhite
+        : st.result === 'black_win' ? ROOM_RESULT.materialBlack : ROOM_RESULT.draw;
+      if (room && typeof room.recordGameResult === 'function') {
+        try {
+          const p = room.recordGameResult(rr);
+          if (p && typeof p.catch === 'function') p.catch(() => { /* noop */ });
+        } catch (e) { /* 协议层未就绪：降级，不抛 */ }
+      }
     }
     this.openGameOver();
   }
@@ -1525,13 +1767,18 @@ class GameplayScene {
     const winner = st.result === 'white_win' ? 'w' : st.result === 'black_win' ? 'b' : null;
     let outcome = 'ongoing';
     if (st.result === 'draw') outcome = 'draw';
-    else if (winner) outcome = this.mode === 'ai' ? (winner === this.playerColor ? 'win' : 'loss') : 'win';
+    // local 恒 win（共享屏、无人称）；ai / remote 按自己执棋色判胜负（与 onGameOver 的 outcome 一致）。
+    else if (winner) outcome = this.mode === 'local' ? 'win' : (winner === this.playerColor ? 'win' : 'loss');
     const nowTs = Date.now();
+    const opponent = this.mode === 'ai' ? `AI · ${this.difficultyName()}`
+      : this.mode === 'local' ? '本地对手'
+      : (this.remoteOpponentNick || '远程对手');
     return {
       id: this.gameId, version: 1, mode: this.mode,
       difficulty: this.mode === 'ai' ? this.difficultyKey() : null,
       playerColor: this.playerColor,
-      opponent: this.mode === 'ai' ? `AI · ${this.difficultyName()}` : '双人对弈',
+      opponent,
+      opponentNick: this.mode === 'remote' ? (this.remoteOpponentNick || '') : '',
       result: st.result, resultReason: st.resultReason || null,
       outcome, startedAt: this.startedAt, endedAt: final ? nowTs : null,
       durationMs: nowTs - this.startedAt, plies, fullMoves: Math.ceil(plies / 2),
@@ -1607,6 +1854,8 @@ class GameplayScene {
   }
 
   doUndo() {
+    // 联机对局禁止单方悔棋，保证两端状态一致。
+    if (this.mode === 'remote') return;
     if (this.game.history.length === 0) return;
     const wasOver = this.state === 'GAMEOVER';
     // 指导模式：悔棋前记下被撤销的决策点评（用于重算统计）
@@ -1618,8 +1867,7 @@ class GameplayScene {
     }
     this.lastMove = null; this.selected = null; this.legalMoves = [];
     this.anim = null; this.landRing = null; this.aiCtx = null;
-    // 双人对弈：悔棋后 sideToMove 已回退，同步把对应一方翻回屏幕底部（§5）
-    if (this.mode === 'local') this.flipBoard = (this.game.turn === COLOR.BLACK);
+    // 本地双人 / 远程方向全程固定：悔棋后不再按 sideToMove 翻转。
     // P0-I2 悔棋软锁修复：悔棋后若轮到 AI（如玩家在 AI 首手前撤销、或撤销后恰好轮到 AI），
     // 必须重新唤起 AI 思考，否则 handleBoardTouch 会因 turn===aiColor 直接 return，造成双向死锁。
     if (this.mode === 'ai' && this.game.turn === this.aiColor) this.startAIThinking();
@@ -1673,6 +1921,8 @@ class GameplayScene {
   }
 
   confirmResign() {
+    // 远程对弈不支持单方认输（房间协议无 resign 同步能力，避免两端结束态不一致）。
+    if (this.mode === 'remote') return;
     GameContext.closeModal();
     GameContext.openModal('confirm', {
       title: '确定认输？', message: '认输后本局将判负，棋谱按设置自动保存。',
@@ -1737,6 +1987,338 @@ class GameplayScene {
     });
   }
 
+  // ==================== 远程双人对弈（mode:'remote'） / 手动朝向 ====================
+
+  /**
+   * 手动翻转棋盘（「更多」抽屉入口）。
+   * 本地 / 人机：把朝向持久化到 defaultOrientation（跨对局 / 跨重启保持），失败时回滚并提示。
+   * 远程：仅改内存，不写设置（两端视角独立，且不应改变下次本地双人的默认朝向）。
+   */
+  toggleBoardFlip() {
+    const prev = this.flipBoard;
+    this.flipBoard = !this.flipBoard;
+    if (this.mode !== 'remote') {
+      let ok = true;
+      try { ok = GameContext.saveSettings({ defaultOrientation: this.flipBoard ? 'black' : 'white' }); }
+      catch (e) { ok = false; }
+      if (ok === false) {
+        this.flipBoard = prev;   // 设置未落盘 → 回滚朝向，避免视觉与持久化不一致
+        try { GameContext.showBanner('方向设置未保存', 'danger'); } catch (e) { /* noop */ }
+      }
+    }
+    GameContext.closeModal();
+  }
+
+  /**
+   * 把本地最新一步异步推到房间；失败 / 版本冲突时拉取最新文档对齐。
+   * 不 await、不阻塞 UI、不改变本地已落子的棋盘。replay 期间（applyingRemote）跳过以抑制回环。
+   */
+  pushRemoteMove() {
+    if (this.applyingRemote) return;   // 远端重放期间不回推（抑制回环）
+    if (!room || typeof room.pushMove !== 'function') return;
+    let st0;
+    try { st0 = this.game.getStatus(); } catch (e) { return; }
+    const uci = st0.movesUci[st0.movesUci.length - 1];
+    if (!uci) return;
+    const result = st0.result || null;   // 与 getStatus().result 语义一致：null / 'white_win' / 'black_win' / 'draw'
+    // expectedRev 一律取房间模块状态（唯一权威 rev 源）：joinRoom 后 rev=1、createRoom 后 rev=0，
+    // 且 room 内部 rev 会随每次成功 pushMove / watch 去重投递递增。this.remoteRev 仅作展示，不作 CAS 入参。
+    let rv = null;
+    try { rv = (room && typeof room.getState === 'function') ? room.getState() : null; } catch (e) { rv = null; }
+    const expectedRev = (rv && typeof rv.rev === 'number') ? rv.rev : 0;
+    let p;
+    try { p = room.pushMove(uci, expectedRev, result); } catch (e) { this.onRemoteConflict(); return; }
+    if (!p || typeof p.then !== 'function') return;   // 防御：非 Promise 返回
+    p.then((r) => {
+      if (r && r.ok && r.updated) {
+        if (r.doc && typeof r.doc.rev === 'number') this.remoteRev = r.doc.rev;
+      } else {
+        this.onRemoteConflict();
+      }
+    }).catch(() => this.onRemoteConflict());
+  }
+
+  /** 推送冲突 / 失败：用 room.pollOnce() 走同一套去重投递，自动回调 onRemoteSnapshot 对齐。 */
+  onRemoteConflict() {
+    if (!room || typeof room.pollOnce !== 'function') return;
+    try {
+      const p = room.pollOnce();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (e) { /* watchRoom 兜底 */ }
+  }
+
+  /**
+   * 房间快照对齐（watchRoom 回调 / 冲突修复共用）。
+   * 仅当远端着法更长才重放（避免本地刚落的子被回退、避免回环）；重放期间不推云、不动 flipBoard。
+   * 结束态复用 onGameOver()（依赖本地 getStatus().result，两端同一份 movesUci → 一致结果）。
+   */
+  onRemoteSnapshot(doc) {
+    if (!doc || !Array.isArray(doc.movesUci)) return;
+    // ===== v5：缓存最新快照 / 对端昵称 / 退出边沿 / 封存解散态 =====
+    this.roomDoc = doc;   // 供 update 的墙钟仲裁判定、对端昵称读取使用
+    // 对端昵称：host 读 guestNick / guest 读 hostNick；能力防御 + 兜底空串。
+    const nick = this.roomRole === 'host' ? doc.guestNick : doc.hostNick;
+    if (typeof nick === 'string' && nick) this.remoteOpponentNick = nick;
+    // 对端退出状态由「未退出」变「退出」时，重置 prompted 允许新一轮 1 分钟提示。
+    const opp = this._opponentLeftInfo(doc);
+    if (opp.left && this._prevOppLeft === false) this.arbitrationPrompted = false;
+    this._prevOppLeft = opp.left;
+    if (doc.status === 'archived' && !this._archivedShown) {
+      this._archivedShown = true;
+      this.remoteStatus = 'archived';
+      try { GameContext.showBanner('残局已封存', 'info'); } catch (e) { /* noop */ }
+      // 封存残局不判成绩：以结算态呈现「残局已封存 · 不判成绩」（perspective 由 remoteStatus 决定）。
+      if (this.state !== 'GAMEOVER') {
+        this.state = 'GAMEOVER'; this._lastOutcome = 'draw'; this.openGameOver();
+      }
+    } else if (doc.status === 'abandoned' && !this._abandonedShown) {
+      this._abandonedShown = true;
+      try { GameContext.showBanner('房间已解散', 'info'); } catch (e) { /* noop */ }
+    }
+    // ===== 以下为原有逻辑（全量重放 / 结束态对齐），保持不变 =====
+    this.remoteStatus = doc.status || 'playing';
+    if (typeof doc.rev === 'number') this.remoteRev = doc.rev;
+    if (doc.movesUci.length > this.game.getStatus().movesUci.length) {
+      this.applyingRemote = true;
+      try {
+        // 房间 movesUci 是「完整历史」；restoreFromMoves 从初始局面整体重放，
+        // 故先复位 game / 吃子 / lastMove，避免在当前残局上重复重放导致首步即非法中断。
+        this.game = new ChessGame();
+        this.captured = { w: [], b: [] };
+        this.lastMove = null;
+        this.restoreFromMoves(doc.movesUci);
+      } finally {
+        this.applyingRemote = false;
+      }
+      // 远端落子不播放本地飞行动画 / 不残留选中态；重放中不改动 flipBoard（远程固定视角）。
+      this.anim = null; this.landRing = null;
+      this.selected = null; this.legalMoves = [];
+      if (this.state !== 'GAMEOVER') this.state = 'IDLE';
+    }
+    // 结束态：两端基于同一 result 显示一致结束文案；房间 result 优先对齐到引擎后再结算。
+    if ((doc.status === 'finished' || doc.result) && this.state !== 'GAMEOVER') {
+      const st = this.game.getStatus();
+      if (!st.result && doc.result && typeof doc.result === 'string') {
+        this.game.result = doc.result;
+        if (doc.resultReason) this.game.resultReason = doc.resultReason;
+      }
+      this.onGameOver();
+    }
+  }
+
+  /** 连接 / 监听错误：提示 + 轮询兜底，不崩溃。 */
+  onRemoteError(reason) {
+    const RC = this.roomConfig || {};   // enter 已用 config.ROOM_CONFIG || {} 兜底
+    const msg = (typeof RC.offlineText === 'string' && RC.offlineText) ? RC.offlineText : '连接中断，正在重连…';
+    try { GameContext.showBanner(msg, 'danger'); } catch (e) { /* noop */ }
+    if (room && typeof room.pollOnce === 'function') {
+      try {
+        const p = room.pollOnce();
+        if (p && typeof p.catch === 'function') p.catch(() => { /* noop */ });
+      } catch (e) { /* noop */ }
+    }
+  }
+
+  // ==================== v5 远程退出仲裁 / 按兵力结束 ====================
+
+  /** 由本端角色推导对端退出信息：host 看 guest 侧、guest 看 host 侧；host 恒执白、guest 恒执黑。 */
+  _opponentLeftInfo(doc) {
+    const d = doc || {};
+    const amHost = this.roomRole === 'host';
+    const presentKey = amHost ? 'guestPresent' : 'hostPresent';
+    const leftAtKey = amHost ? 'guestLeftAt' : 'hostLeftAt';
+    const leftAt = (typeof d[leftAtKey] === 'number') ? d[leftAtKey] : 0;
+    return {
+      role: amHost ? 'guest' : 'host',
+      color: amHost ? 'b' : 'w',
+      leftAt,
+      left: d[presentKey] === false && leftAt > 0
+    };
+  }
+
+  /**
+   * v5 远程退出仲裁状态机（每帧在 update() 调用，仅 remote 且未 GAMEOVER 生效）。
+   * 超时一律用墙钟 Date.now()：项目 update(dt) 的帧累加在切后台即停，而「对手已退出」
+   * 这一事实只存在于云端快照 roomDoc，本机后台不该停表。
+   */
+  _updateArbitration() {
+    if (this.mode !== 'remote' || this.state === 'GAMEOVER') return;
+    const doc = this.roomDoc;
+    if (!doc) return;
+    // 双方均退出判定：协议层 markLeft() 只写本侧 present/leftAt，不自动检测「两端都退出」，
+    // 故本端必须主动调一次 room.markBothLeft() 写出 keepUntil，作为 10 分钟倒计时的起点。
+    // 协议层已保证幂等（keepUntil 已存在返回 already_recorded），两端都调无副作用；
+    // 本地再加 _bothLeftMarked 去重，避免每帧都发云端 CAS。
+    const bothGone = doc.hostPresent === false && doc.guestPresent === false;
+    if (bothGone) {
+      this.remoteBothLeft = true;
+      if (!this._bothLeftMarked) {
+        this._bothLeftMarked = true;
+        if (room && typeof room.markBothLeft === 'function') {
+          try {
+            const p = room.markBothLeft();
+            if (p && typeof p.catch === 'function') p.catch(() => { /* noop */ });
+          } catch (e) { /* 协议层未就绪：降级，不抛 */ }
+        }
+      }
+      // keepUntil 由 markBothLeft 写入后经快照回传才有值；未回传前 HUD 仍显示「双方已离开」。
+      const keepUntil = (typeof doc.keepUntil === 'number' && doc.keepUntil > 0) ? doc.keepUntil : 0;
+      if (keepUntil) {
+        this.remoteAbandonDeadline = keepUntil;
+        if (Date.now() > keepUntil && !this._abandonArchived) {
+          this._abandonArchived = true;
+          this._archiveRemote(false);
+        }
+      }
+      return;
+    }
+    const opp = this._opponentLeftInfo(doc);
+    if (!opp.left) { this.remoteLeft = null; return; }
+    this.remoteLeft = { role: opp.role, color: opp.color, at: opp.leftAt, waitingSince: opp.leftAt };
+    // 「轮到退出方出棋」：doc.turn（'w'/'b'）映射到退出方执棋色。turn 只用于判断该谁走，不用于胜负归属。
+    const turnColor = doc.turn === 'w' || doc.turn === 'white' ? 'w'
+      : (doc.turn === 'b' || doc.turn === 'black' ? 'b' : null);
+    const leaverToMove = !!turnColor && turnColor === opp.color;
+    const timeout = (typeof ROOM_CFG.leaveTimeoutMs === 'number' && ROOM_CFG.leaveTimeoutMs > 0)
+      ? ROOM_CFG.leaveTimeoutMs : 60000;
+    const elapsed = Date.now() - opp.leftAt;
+    // 仅在「轮到退出方 + 超过 1 分钟 + 本轮未提示过 + 弹窗未开」时自动弹仲裁面板。
+    if (leaverToMove && elapsed >= timeout && !this.arbitrationPrompted && !this.arbitrationOpen) {
+      this.arbitrationPrompted = true;
+      this.openArbitrationModal();
+    }
+  }
+
+  /** 剩余兵力统计：返回双方存活棋子数（含王；升变兵按 1 个棋子计，不区分兵种）。 */
+  countMaterial() {
+    const board = this.game && this.game.board;
+    if (!board || typeof board.getPieces !== 'function') return { w: 0, b: 0 };
+    return { w: board.getPieces('w').length, b: board.getPieces('b').length };
+  }
+
+  /**
+   * 按剩余兵力判定结束对弈：未退出方兵力 >= 退出方 → 未退出方胜，否则平局。
+   * 退出方永不可能是 winner（规则的直接推论）。
+   * @param {string} stayerColor 未退出方执棋色 'w'|'b'
+   * @param {string} leaverColor 退出方执棋色 'w'|'b'
+   * @returns {{winner:string|null, reason:string}}
+   */
+  judgeByMaterial(stayerColor, leaverColor) {
+    const m = this.countMaterial();
+    const stayer = m[stayerColor] || 0;
+    const leaver = m[leaverColor] || 0;
+    if (stayer >= leaver) {
+      const reason = stayerColor === 'w' ? ROOM_RESULT.materialWhite : ROOM_RESULT.materialBlack;
+      return { winner: stayerColor, reason };
+    }
+    return { winner: null, reason: ROOM_RESULT.draw };
+  }
+
+  /** 把云端结算结果写进本地引擎状态（result 为引擎语义 white_win|black_win|draw），供 onGameOver() 复用。 */
+  applyRemoteEndResult(result, resultReason) {
+    if (!this.game) return;
+    if (result && typeof result === 'string') this.game.result = result;
+    if (resultReason) this.game.resultReason = resultReason;
+  }
+
+  /** 三选项仲裁面板（通用 confirm 模态，由 ModalManager 统一绘制 3 按钮）；超时自动弹 / 常驻入口再开共用。 */
+  openArbitrationModal() {
+    if (this.mode !== 'remote') return;
+    this.arbitrationOpen = true;
+    const self = this;
+    GameContext.openModal('confirm', {
+      title: '对手已离开',
+      // 文案刻意压在两行内：375 宽度下再长会把句末「。」挤成孤行（实拍复核发现）。
+      message: '对手已离开超过 1 分钟。可继续等待、封存残局，或按剩余兵力结束本局。',
+      buttons: [
+        { label: '继续等待', action: 'wait', variant: 'primary' },
+        { label: '封存残局', action: 'archive', variant: 'secondary' },
+        { label: '结束对弈', action: 'finish', variant: 'danger' }
+      ],
+      onAction: (act) => self.onArbitrationAction(act)
+    });
+  }
+
+  /** 仲裁面板三个 action 的分发（resolveGeneric 不会自动关闭，此处统一 closeModal）。 */
+  onArbitrationAction(act) {
+    GameContext.closeModal();
+    this.arbitrationOpen = false;
+    if (act === 'wait') {
+      // 继续等待：不限时；保持 prompted=true 不再自动弹，但常驻入口仍可随时再开。
+      this.arbitrationPrompted = true;
+      this.arbitrationWaiting = true;
+      return;
+    }
+    if (act === 'archive') { this._archiveRemote(true); return; }
+    if (act === 'finish') { this.confirmFinishByMaterial(); }
+  }
+
+  /** 封存残局（不判成绩）。云端写 fire-and-forget，本地立即切封存态，协议层未落盘也能降级。 */
+  _archiveRemote(withBanner) {
+    if (room && typeof room.archiveGame === 'function') {
+      try {
+        const p = room.archiveGame();
+        if (p && typeof p.catch === 'function') p.catch(() => { /* noop */ });
+      } catch (e) { /* noop */ }
+    }
+    this._onArchived(withBanner);
+  }
+  _onArchived(withBanner) {
+    this.remoteStatus = 'archived';
+    this._archivedShown = true;   // 避免随后 archived 快照重复弹「残局已封存」
+    this.arbitrationPrompted = true;
+    this.arbitrationWaiting = false;
+    this.arbitrationOpen = false;
+    if (withBanner) { try { GameContext.showBanner('残局已封存', 'info'); } catch (e) { /* noop */ } }
+    // 结算模态以「残局已封存 · 不判成绩」呈现（不写胜负 result、不调 onGameOver 判成绩）。
+    if (this.state !== 'GAMEOVER') {
+      this.state = 'GAMEOVER';
+      this._lastOutcome = 'draw';
+      this.openGameOver();
+    }
+  }
+
+  /** 「结束对弈」二次确认 → 按剩余兵力判定 → 云端结束 → 本地结算。 */
+  confirmFinishByMaterial() {
+    const self = this;
+    GameContext.closeModal();
+    GameContext.openModal('confirm', {
+      title: '结束对弈',
+      message: '将按剩余兵力自动判定：未退出方兵力不少于退出方即判胜，否则判平局，退出方不会被判胜。确定结束？',
+      buttons: [
+        { label: '取消', action: 'cancel', variant: 'secondary' },
+        { label: '确认结束', action: 'confirm', variant: 'danger' }
+      ],
+      onAction: (act) => {
+        GameContext.closeModal();
+        if (act === 'confirm') self.finishByMaterialNow();
+      }
+    });
+  }
+  finishByMaterialNow() {
+    const opp = this._opponentLeftInfo(this.roomDoc || {});
+    const stayerColor = opp.color === 'w' ? 'b' : 'w';
+    const j = this.judgeByMaterial(stayerColor, opp.color);
+    if (room && typeof room.finishByMaterial === 'function') {
+      try {
+        const p = room.finishByMaterial(j.winner, j.reason);
+        if (p && typeof p.catch === 'function') p.catch(() => { /* noop */ });
+      } catch (e) { /* noop */ }
+    }
+    // 本地结算：把 winner 映射回引擎语义 result（协议层同样会把 winner 映射成 doc.result）。
+    const result = j.winner === 'w' ? 'white_win' : j.winner === 'b' ? 'black_win' : 'draw';
+    this.applyRemoteEndResult(result, j.reason);
+    this.onGameOver();
+  }
+
+  /** 双方均退出时房间保留倒计时 mm:ss（基于 keepUntil 墙钟）。 */
+  _abandonCountdownText() {
+    if (!this.remoteAbandonDeadline) return '--:--';
+    const sec = Math.max(0, Math.floor((this.remoteAbandonDeadline - Date.now()) / 1000));
+    const mm = Math.floor(sec / 60), ss = sec % 60;
+    return (mm < 10 ? '0' + mm : '' + mm) + ':' + (ss < 10 ? '0' + ss : '' + ss);
+  }
+
   // ==================== 坐标换算 ====================
   cellToScreen(row, col) {
     const drawR = this.flipBoard ? 7 - row : row;
@@ -1759,5 +2341,20 @@ class GameplayScene {
     return { row, col };
   }
 }
+
+/**
+ * v5：退出方「重新加入」兜底入口（房间场景优先用 room.readLocalRoom()）。
+ * 读房间模块本地权威态，返回 {roomId, seat, role, color, rev, status} 或 null；
+ * 协议层未就绪 / 无本地房间 / 读取抛异常时返回 null，绝不抛异常。
+ * 房间场景调用 room.rejoinRoom(roomId, seat) 完成复占后，导航 gameplay 时带 params.rejoin=true。
+ */
+GameplayScene.rejoinEntry = function () {
+  if (!room || typeof room.readLocalRoom !== 'function') return null;
+  try {
+    const r = room.readLocalRoom();
+    if (!r || !r.roomId) return null;
+    return r;
+  } catch (e) { return null; }
+};
 
 module.exports = GameplayScene;

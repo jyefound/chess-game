@@ -24,15 +24,14 @@
 > 由 Ra1-a8 改为 Rb4-b8、tipId 语义化）导致 6 条断言写死旧值而失败；
 > 已改为动态求解杀着 + 数量/id 唯一性从数据层派生（见 §7 第 7 步）。
 >
-> **测试口径更新（v3 云端化 + 第八轮红线修复，2026-11-07，以本节与 §8.9 为准）**：六套 Node 回归
+> **测试口径沿革（历史记录，2026-11-07，不代表当前）**：引擎抽象层落地时六套 Node 回归
 > **327/0**（`test.js 9` · `test-integration.js 59` · `test-engine.js 62` ·
-> `test-endgame.js 100` · `test-endgame-scene.js 86` · `test-gameplay.js 11`）；
-> 云端回归 `test-cloud.js 111/0` + `test-sync.js 177/0`，端到端 `test-recovery.js 86/0`
-> = **374 断言**；另有只读自检 `tools/publish-check.js`（默认退出 0，`--strict` 阻断项退出 1）、
-> `tools/verify-round2.js 66/0`、P0 脚本 `7/0`、
-> `tools/render-shots.js 36 场景 0 失败`。上文 9/59/62/100/84 及 §7 表为
-> 引擎抽象层落地时的历史基线（残局场景断言数后续由 84 增至 86），逐套数值已变化，
-> **当前全量口径以本节与 §8.9 为准**。
+> `test-endgame.js 100` · `test-endgame-scene.js 86` · `test-gameplay.js 11`），
+> 云端 `test-cloud.js 111/0` + `test-sync.js 177/0` + `test-recovery.js 86/0` = **374 断言**，
+> 另有 `tools/verify-round2.js 66/0`、`tools/render-shots.js 36 场景 0 失败`。
+> 以上均为**各轮历史基线**，此处保留仅供沿革追溯，不得作为当前口径引用。
+> **当前全量口径见 §8.9 与 `README.md`「测试（回归门禁）」**：十套 Node 回归（含远程房间协议 v5）、
+> `tools/verify-round2.js 81/0`、`tools/render-shots.js` 47 成功 / 0 失败 / 0 跳过。
 
 ---
 
@@ -412,11 +411,13 @@ chess.endgame.v1 / chess.endgame.resume.v1
 
    | 命令 | 基线 | 覆盖 |
    |---|---|---|
-   | `node test.js` | 9/9 | core 规则 / 将杀 / 易位 / 升变 / AI |
-   | `node test-integration.js` | 59/59 | 场景栈 / 输入防误触 / 教学防泄题 / 存储返回值 |
-   | `node test-engine.js` | 62/62 | 契约 / registry / 适配器 / 残局存档 API |
-   | `node test-endgame.js` | 100/100 阵 | 强制杀可达性 + 数值表一致性（FEN、目标步数、moveCap、tipId、技能权重） |
-   | `node test-endgame-scene.js` | 84/84 | S9 阵图 + S10 状态机 / 软计时 / 机会经济 / 技能 / 星级 / 奖励写入 / 模态流程 |
+   | `node test.js` | 9 项检查 | core 规则 / 将杀 / 易位 / 升变 / AI |
+   | `node test-integration.js` | **96/0** | 场景栈 / 输入防误触 / 教学防泄题 / 存储返回值；含 `versus` 单入口与 room 场景 |
+   | `node test-engine.js` | **62/0** | 契约 / registry / 适配器 / 残局存档 API |
+   | `node test-endgame.js` | **100/100 阵** | 强制杀可达性 + 数值表一致性（FEN、目标步数、moveCap、tipId、技能权重） |
+   | `node test-endgame-scene.js` | **86/0** | S9 阵图 + S10 状态机 / 软计时 / 机会经济 / 技能 / 星级 / 奖励写入 / 模态流程 |
+| `node test-gameplay.js` | **98/0** | 玩法 / 固定朝向 / 远程视角 / 退出仲裁 / 兵力判定 / 心跳 / 棋谱三态 |
+| `node test-room.js` | **153/0** | 远程对局房间协议 v5 / 分享 query 冷 / 热启动 / `.watch()` + 2.5s 轮询 / `movesUci` + `rev` CAS / 退出仲裁 / 封存续局闭环 / `sweepAbandoned()` 超时兜底 / 6h 过期 / 删除清理 |
 
    **写测试的两条硬约束**（曾踩过坑）：残局库已扩到 100 阵、妙招 15 条，
    ① 数量断言一律从 `ENDGAMES.length` / `TIPS.length` 派生（或断言「≥初始规模 + id 唯一」），
@@ -586,20 +587,27 @@ chess.endgame.v1 / chess.endgame.resume.v1
 - 失败操作留在 `pendingQueue`（本地持久化 `chess.sync.queue.v1`），由 `onShow` / 下次写 / 下次冷启动重试；`_flushPromise` 保证串行。
 - `syncMeta`（`lastPullAt` / `lastPushAt` / `stateRev` / `ops`）落本地，供 CAS 与去重恢复。
 
-### 8.9 测试门禁（当前全量口径，2026-11-07）
+### 8.9 测试门禁（当前全量口径，2026-11-10）
+
+> 本节为**当前**口径；逐套命令与数字同时维护在 `README.md`「测试（回归门禁）」。§8.1 上方注记与 `REMAINING_OPTIMIZATION.md` 中的 `327/0` 等均为历史基线。
 
 | 命令 | 结果 | 覆盖 |
 |---|---|---|
-| 六套回归 `test.js` / `test-integration.js` / `test-engine.js` / `test-endgame.js` / `test-endgame-scene.js` / `test-gameplay.js` | **327/0**（`9 / 59 / 62 / 100 / 86 / 11`） | 既有规则 / 场景 / 引擎 / 残局 / 玩法 |
-| `node test-cloud.js` | **111/0** | `cloud.js` 能力探测、`init`、`get/add/update/remove`、值消毒、字节上限、故障注入；**追加** tombstone 无明文、`deleteStateDoc` 物理删 / 不可用已决议、`_validKey` 128/129、严格 mock 断言 `where._openid === '{openid}'` |
-| `node test-sync.js` | **177/0** | `mergeKey` 字段级语义、CAS 冲突重拉、`opId` 去重、tombstone、pendingQueue、`start/flush/requestDeleteAll`、授权门控；**追加** `noteWrite` 门控 / `clearPending` / `updatedAt` LWW / tombstone 跨设备 / 稳定态零入队 / 超限 op / 50 局分批并发 ≤10 / `OPS_KEY` 兼容 / `openContract` 四分支 |
-| `node test-recovery.js`（新建） | **86/0** | **端到端清缓存恢复**：设备 A 造真实进度推云 → 清缓存 → 设备 B 清 `require.cache` 重新加载后 `start()` → 28 个读 API 精确恢复 → 场景 `onDataChanged()` 自愈 → 删除不复活；全程内存 `wx.cloud` |
-| `node tools/publish-check.js`（新建） | 非 strict 退出 0（阻断 3 / 通过 6）；`--strict` 阻断项退出 1 | 只读发布前自检：配置 / 集合名 / 【待填】/ 过时文案 / 单机版 / `publishCheck` / `src/` 禁用 API；不回显 env 值 |
-| `tools/verify-round2.js` | **66/0** | 功能链路 + 5 视口命中区 + 胶囊避让 + 语义断言 |
-| P0 脚本（`/tmp/verify_p0.js`） | **7/0** | 第 11 阵章节条 / 底部空隙命中区 |
-| `tools/render-shots.js` | **36 场景 0 失败** | 离屏渲染回归 |
+| `node test.js` | 9 项检查 | 规则 / 将杀 / 易位 / 升变 / AI |
+| `node test-integration.js` | **96/0** | 场景栈 / 导航 / 输入防误触 / 存储返回值；含 `versus` 单入口与 room 场景 |
+| `node test-engine.js` | **62/0** | 契约 / registry / 适配器 / 残局存档 API |
+| `node test-endgame.js` | **100/100 阵** | 强制杀可达性 + 数值表一致性 |
+| `node test-endgame-scene.js` | **86/0** | S9 阵图 + S10 状态机 / 软计时 / 机会经济 / 技能 / 星级 / 模态流程 |
+| `node test-gameplay.js` | **98/0** | 玩法 / 固定朝向 / 远程视角 / 退出仲裁 / 兵力判定 / 心跳 / 棋谱三态 / `rejoinEntry` |
+| `node test-room.js` | **153/0** | 远程房间协议 v5 / 6 位数字码 / `rev` CAS / 心跳在线态 / 退出与双方退出 / 封存续局端到端闭环 / `sweepAbandoned()` 最终一致性兜底 / 6h 过期 |
+| `node test-cloud.js` | **111/0** | `cloud.js` 能力探测 / `init` / 值消毒 / 字节上限 / tombstone 无明文 / `deleteStateDoc` 物理删 / 故障注入 |
+| `node test-sync.js` | **177/0** | `mergeKey` 字段级语义 / CAS 冲突重拉 / `opId` 去重 / tombstone / pendingQueue / 授权门控 / `requestDeleteAll` |
+| `node test-recovery.js` | **86/0** | 端到端清缓存恢复：设备 A 造进度推云 → 清缓存 → 设备 B 重加载 `start()` → 28 个读 API 精确恢复 → 场景自愈 → 删除不复活 |
+| `node tools/verify-round2.js` | **81/0** | 第二轮审查自动断言（功能链路 + 多视口命中区 + 胶囊避让 + 语义） |
+| `node tools/render-shots.js` | **47 成功 / 0 失败 / 0 跳过** | 离线真渲染出图与视觉回归（含 375 / 320 两档仲裁模态） |
+| `node tools/publish-check.js` | 默认 rc=0（阻断 1 / 通过 8）；`--strict` rc=1 | 只读发布前自检：配置 / 集合名 / 【待填】/ 过时文案 / 禁用 API；唯一阻断项为 `PRIVACY_POLICY.md` 6 处【待填】，属上线前须由运营方填实的真实信息，**不得编造或放宽检查绕过** |
 
-**云端回归断言合计 374**（111 + 177 + 86）；**六套 327/0 + 云端 374 断言 + `tools/publish-check.js`** 为当前口径。云端默认关闭且 Node 环境无 `wx.cloud` 时，能力探测静默降级，六套回归全绿。所有 `.md` / `test*.js` / `tools` 均被 `packOptions.ignore` 排除出代码包。
+十套 Node 回归在纯 Node 环境执行，无需微信运行时；无 `wx.cloud` 时能力探测静默降级，故与云端配置开关无关、始终全绿（云端当前已开启，见 §8.12）。所有 `.md` / `test*.js` / `tools` / `review-shots/` 均被 `packOptions.ignore` 排除出代码包。
 
 ### 8.10 已知取舍
 
@@ -618,5 +626,74 @@ chess.endgame.v1 / chess.endgame.resume.v1
 | `PRIVACY_POLICY.md` | 完整可托管隐私政策（收集范围、境内存储、儿童专章、防沉迷、用户权利、拒绝授权仅本地模式等） |
 | `WECHAT_PUBLISH_GUIDE.md` | 上架材料、资质结论、时间线（含云开发 / 集合 / 安全规则 / 隐私指引 / 适龄 / 备案前置节点） |
 
-> 本章描述的是**已实现但默认关闭**的能力；填入 env 并完成权限确认后才真正联网。本轮未创建任何云端资源、未写入任何数据、未变更任何配置或安全规则。
+### 8.12 远程双人对弈（chess_rooms · 本批次新增）
+
+> 云端集合 / 规则 / 索引已由 MCP 直连落地并回读校验；`test-room.js`（153/0）已纳入十套回归全绿。合规与待办见 `PRIVACY_POLICY.md` §十三 / §十四、`CLOUD_DEPLOY.md` §12、`WECHAT_PUBLISH_GUIDE.md`。
+
+**新增文件（目录树补充）**
+
+| 文件 | 职责 |
+|---|---|
+| `src/core/room.js` | 房间独立通道（`chess_rooms` v5）：`wx.cloud.database()`（含 `.watch()`）、`movesUci` 权威着法日志、`rev` 版本号 CAS、2.5s 轮询兜底、6h 过期惰性判定、`deleteAllRooms()`；v5 新增双方自填昵称 / 局数比分 / 在线心跳 / 退出仲裁 / 封存残局续局 / 双方退出兜底补判（`sweepAbandoned()`） |
+| `src/scenes/room.js` | 房间场景 `room`：建房 / 6 位数字房间码 / `wx.shareAppMessage` 分享卡片 / 手动输码加入 / 等待与加入失败态；`from==='versus'` 时 hub 相位「返回」回选择页，否则回菜单 |
+| `src/scenes/versus.js` | 对局方式选择页 `versus`（注册名 `versus`）：主卡「本地双人」→ `replaceScene('gameplay',{mode:'local'})`；次卡「邀请好友加入」→ `pushScene('room',{from:'versus'})` |
+| `test-room.js` | 远程对局房间协议 v5 离线 / 集成验收（**153/0，已纳入十套回归**；含封存续局端到端闭环与 `sweepAbandoned()` 超时兜底） |
+
+**云端集合与规则**
+
+`chess_rooms`（一房间 1 文档），安全规则 `{"read":true,"create":"doc._openid == auth.openid","update":true,"delete":"doc._openid == auth.openid"}`；索引 `_id_` / `_openid_1` / `idx_roomId`（唯一）/ `idx_status_expireAt`（status,expireAt），MCP 回读已确认。与个人进度两集合（`chess_state` / `chess_records`，规则不变、存量数据不受影响）并列但**用途分离**；§8.1–§8.11 中「两集合」均指个人进度链路。
+
+**双通道同步**
+
+```
+.watch() 实时推送（主）+ 2.5s 轮询兜底（断线 / 小游戏端能力缺失时补齐）
+movesUci（权威着法日志，各端自行回放）+ rev 版本号 CAS（并发写抑制）
+房间 6h 过期（expireAt）；无服务端定时清理，靠前端惰性判定 + 房主 / 删除云端数据清理
+```
+
+`read:true` 是跨 `openid` 用 `.watch()` 实时监听房间文档的硬性前提；好友加入后，同一房间内双方各自可见对方的 `_openid` 标识、对局着法 / 结果，以及**双方各自自填的昵称**。**房间文档含双方用户自填昵称**（`hostNick` / `guestNick`，建房 / 加入时本人输入，≤12 字、去控制字符，非微信昵称；仅用于房间内展示与棋谱里显示对手，可见范围仅同一房间内双方，随房间过期 / 删除清除）；**仍不含微信头像、微信昵称、手机号、位置、通讯录**。`seat` 为随机串而非 `openid` 明文。
+
+**房间文档字段（`chess_rooms` v5，`src/core/room.js` 的 `createRoom()` 在 `add()` 里一次性写入）**
+
+| 分组 | 字段 |
+|---|---|
+| 基础 | `_id` / `_openid`（房主，**平台在 `add()` 时注入**、客户端绝不显式写）、`roomId`、`hostSeat` / `guestSeat`（随机席位串）、`hostColor`、`status`（`waiting` / `playing` / `finished` / `archived` / `abandoned`）、`movesUci`、`turn`、`rev`、`lastSeat`、`result` / `resultReason`、`schemaVersion`、`createdAt` / `updatedAt` / `expireAt` |
+| 双方自填昵称 | `hostNick` / `guestNick`（≤12 字、去控制字符，`joinRoom(code,{nick})` 写入 `guestNick`） |
+| 局数与比分 | `maxGames`（0=不限）、`gameIndex`、`gamesPlayed`、`hostScore`、`guestScore`（平局不计） |
+| 在线态 | `hostPresent` / `guestPresent`、`hostLeftAt` / `guestLeftAt`、`hostOnlineAt` / `guestOnlineAt`（心跳维护，判断对方是否退出） |
+| 封存与保留 | `archived` / `archivedMovesUci`（完整着法快照）/ `archivedAt` / `archivedBy`、`keepUntil`（双方均退出后的保留截止） |
+
+**未变的既有机制**：`rev` 版本号 CAS（`where({roomId, rev}).update()` 防并发覆盖）、`_openid` 平台注入、`idx_roomId` 唯一索引、`expireAt` 6 小时过期（前端惰性判定、无服务端定时清理）均保持原样；安全规则与 4 个索引见 §8.12 上文与 `CLOUD_DEPLOY.md` §12.1 / §12.2。
+
+**v5 协议层能力（`src/core/room.js` 的 v5 新增导出）**：`heartbeat()` / `markLeft()` / `markBothLeft()` / `rejoinRoom()` / `setMaxGames()` / `recordGameResult()` / `archiveGame()` / `finishByMaterial()` / `listArchivedRooms()` / `sweepAbandoned()` / `readLocalRoom()` 等。退出仲裁：一方退出写 `present=false + leftAt` 且席位保留供重新加入；轮到退出方出棋超 `leaveTimeoutMs`（60s 墙钟）后未退出方可选继续等待 / 封存残局 / 结束对弈，结束按剩余兵力判定（退出方永不可被判胜）；双方均退出保留 `bothLeftKeepMs`（10 分钟）后自动解散并封存残局、不判成绩；封存残局 `archiveKeepMs`（设计 7 天，前端惰性判定）供房主 `createRoom({seedMovesUci})` 续局，`listArchivedRooms()` 按 `_openid` 仅查本人房主创建的封存房。棋谱侧：`src/data/recordLabels.js` 统一 `MODE_LABEL = {ai:'人机对战', local:'本地双人', remote:'远程对弈'}`，列表与回放页显示模式标签；远程棋谱 `opponent` 为对端自填昵称（回落「远程对手」）并带 `opponentNick`，远程对局也写入本地棋谱（存本机 `chess.record.v1.*`，经个人进度云同步镜像到 `chess_records`）。完整合规披露见 `PRIVACY_POLICY.md` §十三 / §十四。
+
+**零云函数、无服务端定时器（最终一致性边界）**：项目不部署云函数，云端没有定时任务，双方均退出后 `keepUntil`（10 分钟）到期**不会在精确时刻**自动解散。任一端重新进入房间页时，`src/scenes/room.js` 的 `_loadArchived()` 先调用 `room.sweepAbandoned()` 按 `keepUntil` 补判超时房（CAS 写 `archived=true` / `archivedMovesUci=movesUci` / `archivedAt` / `status='abandoned'` / `rev+1`，**不写 `result` / `resultReason`，即不判成绩**），再 `listArchivedRooms()` 拉取封存列表；`sweepAbandoned()` 幂等，重复扫描不二次封存。两端均退出且无人回来时，补判延后到有人回来或 6h 过期惰性判定为止。协议侧断言见 `test-room.js` §24。
+
+**信息架构 / 场景跳转（§5 IA 补充）**
+
+```
+menu ──「双人对弈」(单入口, key:'versus', 图标 twoPlayers)──► versus（对局方式选择页）
+   ├─(本地双人 主卡·默认)──► gameplay(mode:'local')   棋盘方向全程固定
+   └─(邀请好友加入 次卡)──► room ──(建房/分享/输码加入成功)──► gameplay(mode:'remote')
+   分享卡片 query: room=xxxxxx ─► 冷启动 getLaunchOptionsSync / getEnterOptionsSync ─┐
+   热启动 wx.onShow(res.query) ─────────────────────────────────────────────────────┤
+                                                                                    ▼
+                                      直接进 room（不经 versus）→ gameplay(mode:'remote')  双机各用自己设备、不共用屏幕
+```
+
+分享链接冷 / 热启动**直达 `room`**（不经选择页）。导航语义（两条返回路径不同）：`versus` → 本地双人用 `replaceScene('gameplay',{mode:'local'})`（过渡页不进栈）；`versus` → 邀请好友加入用 `pushScene('room',{from:'versus'})`；`versus` 顶栏返回 `popScene()` 回主菜单；`room`（hub 相位，`from==='versus'`）返回为 `emit('navigate',{to:'versus'})` + `popScene()` → **回选择页**，`room`（`from==='menu'`）返回为 `emit('navigate',{to:'menu'})` + `popScene()` → **回主菜单**。
+
+各端固定看自己执棋色一侧、全程不随回合翻转；本地双人棋盘方向亦改为**全程固定**（默认白在屏幕下方，仅手动调转且持续保持），上方一侧棋子旋转 180° 朝上。
+
+**为何独立通道、不与个人进度同步混用**
+
+`room.js` 直连 `wx.cloud.database()`，**不经过** `sync.js` 的个人进度同步，也不经过 `storage.js` 的 `addWriteHook` 写 hook 与 `KEY_RE` 键名白名单。若房间写入误走写 hook，会被登记进 `pendingQueue`、经 `mergeKey` 合并并 `applyRemote` 回填本地，**污染棋谱 / 设置 / 残局进度等个人存档**，甚至把对局着法镜像成 `chess_records` 文档。`sync.requestDeleteAll()` 仅在末尾调用 `room.deleteAllRooms()` 清理本人房间，除此之外两条链路零交叉；删除链路的二次确认文案已同步说明会删除本人房间。
+
+**避坑清单（本批次补充）**
+
+- `read:true` 与 `.watch()` 跨 `openid` 是绑定关系：要实时监听他人创建的房间，读规则就不能是「仅本人可读」；可见范围必须靠高熵房间码（6 位数字、`10^6` 组合、分享链接即凭证）收敛，并在隐私文本中如实披露。
+- **前端查询条件必须是安全规则的子集**：`chess_state` / `chess_records` 下所有 `where` 必带 `_openid`；本集合 `read` / `update` 为 `true`，故该约定**不适用于 `chess_rooms`**（但仍以 `roomId` + `rev` 条件更新，不用 `doc(id).update()` / `doc().set()`）。
+- 房间码高熵要求：6 位数字是下限，分享链接即凭证；无云函数 ⇒ 无法在服务端校验走子合法性或做权威反作弊，靠房间码 + `rev` CAS + 席位串在应用层识别（好友休闲对弈取舍，见 `PRIVACY_POLICY.md` §十三）。
+
+> §8.1–§8.11 描述个人进度同步链路（v3 云端化交付轮次的历史口径，当时云端默认关闭、未创建云端资源）；**2026-11-08 起的最新云端状态**（`CLOUD_CONFIG.enabled:true`、`env` 已填、三个集合与安全规则 / 索引已落地并经 MCP 回读校验）见 §8.12 与 `CLOUD_DEPLOY.md` §11 / §12。本批次新增的远程对局为独立通道，不改变 §8.1–§8.11 所述个人进度同步逻辑。
 

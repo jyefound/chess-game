@@ -18,6 +18,11 @@
  * 调用签名与旧版完全兼容：drawPiece(ctx,type,color,x,y,size,opts?)、
  * drawPieceWithShadow(ctx,type,color,x,y,size,opts?)、clearPieceCache()。
  * 调用方已 scale（无需关心 DPR 缩放绘制）；离屏图集按 DPR 预渲染。
+ *
+ * opt-in 能力：opts.rotate180=true 时棋子绕中心旋转 180°（专供「本地双人上方一侧
+ * 棋子朝上」），默认 false。缓存 key 不含朝向——图集里始终是正向干净棋子，旋转只
+ * 作用于绘制时的 ctx 变换，drawImage / 逐帧直绘两条路径都自然生效；其它场景（残局 /
+ * 复盘 / 教学 / 菜单 / 棋谱）不传该选项，行为完全不变。
  */
 
 'use strict';
@@ -224,7 +229,10 @@ function _getPieceCanvas(type, color, size) {
 }
 
 // 通用绘制入口：优先缓存 drawImage，失败直绘。
-// opts: { shadow:boolean, selected:boolean, scale:number, alpha:number }
+// opts: { shadow:boolean, selected:boolean, scale:number, alpha:number, rotate180:boolean }
+//   rotate180 为 opt-in（默认 false）：以棋子中心 (x,y) 为轴旋转 180°，专供「本地双人
+//   上方一侧棋子朝上」。与 scale 同为绕中心的相似变换，叠加顺序互不影响；缓存图集里
+//   始终是正向干净棋子（key 不含朝向），旋转仅作用于绘制时 ctx 变换，两条路径都生效。
 function _draw(ctx, type, color, x, y, size, opts) {
   if (!PIECES[type]) return;
   opts = opts || {};
@@ -236,6 +244,11 @@ function _draw(ctx, type, color, x, y, size, opts) {
   if (scale !== 1) {
     ctx.translate(x, y);
     ctx.scale(scale, scale);
+    ctx.translate(-x, -y);
+  }
+  if (opts.rotate180) {
+    ctx.translate(x, y);
+    ctx.rotate(Math.PI);
     ctx.translate(-x, -y);
   }
 
@@ -261,21 +274,24 @@ function _draw(ctx, type, color, x, y, size, opts) {
  * @param {string} color 棋子颜色 'w'/'b'
  * @param {number} x,y   中心坐标
  * @param {number} size  格子大小
- * @param {object} opts  可选 {scale, alpha}
+ * @param {object} opts  可选 {scale, alpha, rotate180}
+ *   rotate180=true（opt-in，默认 false）时棋子绕中心旋转 180°。
  */
 function drawPiece(ctx, type, color, x, y, size, opts) {
   opts = opts || {};
   _draw(ctx, type, color, x, y, size, {
     shadow: false,
     scale: opts.scale,
-    alpha: opts.alpha
+    alpha: opts.alpha,
+    rotate180: !!opts.rotate180
   });
 }
 
 /**
  * 绘制棋子（带投影，视觉 §6.2）。
- * @param {object} opts 可选 {selected, scale, alpha}
+ * @param {object} opts 可选 {selected, scale, alpha, rotate180}
  *   selected=true 时叠加金色光晕并 scale 1.06（§6.2 选中态 / §10）。
+ *   rotate180=true（opt-in，默认 false）时棋子绕中心旋转 180°。
  */
 function drawPieceWithShadow(ctx, type, color, x, y, size, opts) {
   opts = opts || {};
@@ -283,7 +299,8 @@ function drawPieceWithShadow(ctx, type, color, x, y, size, opts) {
     shadow: true,
     selected: !!opts.selected,
     scale: opts.selected ? (opts.scale || 1.06) : opts.scale,
-    alpha: opts.alpha
+    alpha: opts.alpha,
+    rotate180: !!opts.rotate180
   });
 }
 

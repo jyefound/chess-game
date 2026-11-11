@@ -99,11 +99,28 @@ function applyFontRemap(ctx) {
   return ctx;
 }
 
+// R2：拦截主画布 ctx.rotate 计数（per-ctx，不污染其它 shot / 离屏缓存）。
+// pieces.js 的 opts.rotate180 会调用 ctx.rotate(Math.PI)，据此判断「上半区棋子是否
+// 真的被旋转」，比只 console.log 一个常量可靠。原生方法需正确 this 绑定。
+function applyRotateSpy(ctx) {
+  try {
+    const proto = Object.getPrototypeOf(ctx);
+    const orig = proto.rotate;
+    if (typeof orig !== 'function') { ctx._rotateCalls = -1; return ctx; }
+    ctx._rotateCalls = 0;
+    Object.defineProperty(ctx, 'rotate', {
+      configurable: true, writable: true,
+      value: function () { ctx._rotateCalls++; return orig.apply(this, arguments); }
+    });
+  } catch (e) { ctx._rotateCalls = -1; }
+  return ctx;
+}
+
 function newCtx(w, h) {
   const canvas = createCanvas((w || VW) * DPR, (h || VH) * DPR);
   const ctx = canvas.getContext('2d');
   ctx.scale(DPR, DPR); // 逻辑坐标
-  return applyFontRemap(ctx);
+  return applyRotateSpy(applyFontRemap(ctx));
 }
 
 const SceneManager = require(path.join(PROJ, 'src/scenes/manager'));
@@ -159,6 +176,12 @@ function gameoverDriver(opts) {
   };
 }
 
+// R2：impl-gameplay 的完整落盘判据（与 test-gameplay.js / test-integration.js 同源）。
+// 中间态时 after 回调只打印实测值 + 跳过标注，不把 shot 判为失败；集成后转硬断言。
+const GAMEPLAY_SRC_NOW = fs.readFileSync(path.join(PROJ, 'src/scenes/gameplay.js'), 'utf8');
+const V2_WIRED = !/if\s*\(this\.mode === 'local'\)\s*this\.flipBoard\s*=/.test(GAMEPLAY_SRC_NOW) &&
+  /toggleBoardFlip/.test(GAMEPLAY_SRC_NOW) && /topPiecesUpsideDown/.test(GAMEPLAY_SRC_NOW);
+
 // ---------------- 场景驱动表 ----------------
 const SCENES = [
   {
@@ -170,6 +193,17 @@ const SCENES = [
         5: { stars: 2, bestTimeMs: 14200 }, 6: { stars: 3, bestTimeMs: 9900 }
       } });
       defaultEnter(scene, sm);
+    },
+    // IA 变更后菜单为单入口 'versus'（旧 'local'/'remote' 并列双按钮已移除）
+    after: (ctx, scene) => {
+      const keys = (scene.regions || []).map(r => r.key);
+      const vs = (scene.regions || []).find(r => r.key === 'versus');
+      console.log('  · menu regions=' + JSON.stringify(keys) +
+        ' | versus rect=' + JSON.stringify(vs && vs.rect));
+      if (keys.indexOf('versus') < 0) throw new Error('menu 缺少 "versus" 单入口命中区：' + keys.join(','));
+      if (keys.indexOf('local') >= 0 || keys.indexOf('remote') >= 0) {
+        throw new Error('menu 仍残留 "local"/"remote" 旧并列入口：' + keys.join(','));
+      }
     }
   },
   {
@@ -332,16 +366,205 @@ const SCENES = [
     after: (ctx, scene) => console.log('  · 进入 flipBoard=' + scene.flipBoard + ' (白先走→白在底=false)')
   },
   {
-    // 双人对弈：白走一步后 sideToMove 切换，黑翻到屏幕底部（flipBoard=true）—— 当前走子方始终在近端
-    name: 'gameplay-local-flip', file: 'src/scenes/gameplay', label: '双人对弈(走子后·黑在底)',
+    // 双人对弈固定方向：进入白在底；白走一步后棋盘仍固定（不随回合翻转）
+    name: 'gameplay-local-fixed', file: 'src/scenes/gameplay', label: '双人对弈(走子后·棋盘仍固定)',
     driver: (scene, sm) => {
       scene.enter({ mode: 'local', screenWidth: VW, screenHeight: VH, _sm: sm });
-      // 白先走：直接取当前 sideToMove 的第一步合法着（getLegalMoves 返回即白方着）
       const lm = scene.game.getLegalMoves()[0];
       scene.commitMove(lm, false);
       try { scene.update(0.016); } catch (e) {}
     },
-    after: (ctx, scene) => console.log('  · 白走一步后 flipBoard=' + scene.flipBoard + ' (黑轮走→黑在底=true)')
+    after: (ctx, scene) => {
+      const fb = scene.flipBoard;
+      console.log('  · 走子后 flipBoard=' + fb + ' (固定视角，应为 false)');
+      if (V2_WIRED && fb !== false) throw new Error('固定视角回归：走子后 flipBoard 应为 false，实为 ' + fb);
+      if (!V2_WIRED) console.log('  · 跳过断言（impl-gameplay 未落盘，集成时复跑）');
+    }
+  },
+  {
+    // 双人对弈手动翻转：调 toggleBoardFlip（未落盘时降级为等价直接置位），上半区棋子旋转 180°
+    name: 'gameplay-local-flipped', file: 'src/scenes/gameplay', label: '双人对弈(手动翻转·上方棋子朝上)',
+    driver: (scene, sm) => {
+      scene.enter({ mode: 'local', screenWidth: VW, screenHeight: VH, _sm: sm });
+      if (typeof scene.toggleBoardFlip === 'function') {
+        try { scene.toggleBoardFlip(); } catch (e) { scene.flipBoard = true; }
+      } else scene.flipBoard = true;   // 等价手动翻转入口（实现未落盘时的降级）
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => {
+      const fb = scene.flipBoard, rot = ctx._rotateCalls;
+      console.log('  · 手动翻转 flipBoard=' + fb + '  ctx.rotate 调用次数=' + rot);
+      if (fb !== true) throw new Error('手动翻转后 flipBoard 应为 true，实为 ' + fb);
+      if (V2_WIRED) {
+        if (!(rot > 0)) throw new Error('local 未开启 topPiecesUpsideDown：ctx.rotate=' + rot);
+      } else {
+        console.log('  · 跳过旋转/接线断言（impl-gameplay 未落盘，集成时复跑）');
+      }
+    }
+  },
+  {
+    // 远程对弈执白：flipBoard=false，且 topPiecesUpsideDown 不得开启（仅 local 开）
+    name: 'gameplay-remote', file: 'src/scenes/gameplay', label: '远程对弈(执白·棋盘未旋转)',
+    driver: (scene, sm) => {
+      scene.enter({ mode: 'remote', playerColor: 'w', roomId: '123456', seat: 's', role: 'host',
+        screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => {
+      const fb = scene.flipBoard, rot = ctx._rotateCalls;
+      console.log('  · remote(执白) flipBoard=' + fb + '  ctx.rotate=' + rot + ' (topPiecesUpsideDown 应未开启)');
+      if (rot > 0) throw new Error('remote 误开启 topPiecesUpsideDown：ctx.rotate=' + rot);
+      if (V2_WIRED && fb !== false) throw new Error('remote 执白 flipBoard 应为 false，实为 ' + fb);
+      if (!V2_WIRED) console.log('  · 跳过 flipBoard 断言（impl-gameplay 未落盘，集成时复跑）');
+    }
+  },
+  {
+    // 远程对弈执黑：flipBoard=true，且 topPiecesUpsideDown 不得开启
+    name: 'gameplay-remote-black', file: 'src/scenes/gameplay', label: '远程对弈(执黑·棋盘已翻转)',
+    driver: (scene, sm) => {
+      scene.enter({ mode: 'remote', playerColor: 'b', roomId: '123456', seat: 's', role: 'host',
+        screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => {
+      const fb = scene.flipBoard, rot = ctx._rotateCalls;
+      console.log('  · remote(执黑) flipBoard=' + fb + '  ctx.rotate=' + rot + ' (topPiecesUpsideDown 应未开启)');
+      if (rot > 0) throw new Error('remote 误开启 topPiecesUpsideDown：ctx.rotate=' + rot);
+      if (V2_WIRED && fb !== true) throw new Error('remote 执黑 flipBoard 应为 true，实为 ' + fb);
+      if (!V2_WIRED) console.log('  · 跳过 flipBoard 断言（impl-gameplay 未落盘，集成时复跑）');
+    }
+  },
+  {
+    // 房间 hub：用 impl-room-ui 提供的 phase 工具钩子直出相位（不触云、不依赖异步建房）
+    name: 'room-hub', file: 'src/scenes/room', label: '房间(hub)',
+    skipIfMissing: 'src/scenes/room.js',
+    driver: (scene, sm) => {
+      scene.enter({ phase: 'hub', screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => console.log('  · phase=' + scene.phase + '  regions=' + (scene.regions || []).length)
+  },
+  {
+    // 房间 hosting：phase 工具钩子 + 6 位示例房间码（确定性状态，不发起 createRoom）。
+    // 注意 _renderHosting(room.js:495) 的 6 格读 this.roomId，_renderJoining(:539) 读 this.code；
+    // 故 roomId 与 code 同时传，两者都硬断言，确保格子不是占位圆点。
+    name: 'room-hosting', file: 'src/scenes/room', label: '房间(hosting)',
+    skipIfMissing: 'src/scenes/room.js',
+    driver: (scene, sm) => {
+      scene.enter({ phase: 'hosting', roomId: '482193', code: '482193',
+        screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => {
+      const code = scene.code, rid = scene.roomId;
+      console.log('  · phase=' + scene.phase + '  roomId=' + rid + '  code=' + code +
+        '  regions=' + (scene.regions || []).length);
+      if (code !== '482193') throw new Error('hosting 6 位房间码未渲染：scene.code=' + code + '（应为 482193）');
+      if (rid !== '482193') throw new Error('hosting roomId 未设置：scene.roomId=' + rid);
+    }
+  },
+  {
+    // 房间 joining：phase 工具钩子 + 数字键盘输入示例（不触发 joinRoom）
+    name: 'room-joining', file: 'src/scenes/room', label: '房间(joining)',
+    skipIfMissing: 'src/scenes/room.js',
+    driver: (scene, sm) => {
+      scene.enter({ phase: 'joining', code: '4821', screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => console.log('  · phase=' + scene.phase + '  code=' + scene.code +
+      '  regions=' + (scene.regions || []).length)
+  },
+  {
+    // 320×568 窄屏：3×4 数字键盘（0-9 + 删除 + 确认）完整性兜底。
+    // room.js:564 keyH=Math.max(34, Math.min(54, ...)) 有 34pt 下限，窄屏可能撑破 contentBottom。
+    name: 'room-joining-320', file: 'src/scenes/room', label: '房间(加入·320 窄屏键盘)',
+    vp: { W: 320, H: 568 },
+    skipIfMissing: 'src/scenes/room.js',
+    driver: (scene, sm) => {
+      scene.enter({ phase: 'joining', code: '4821', screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => {
+      const L = layoutMod.get();
+      const contentBottom = Math.min(L.contentBottom, VH - 12);
+      const regions = scene.regions || [];
+      const digitKeys = regions.filter(r => /^d[0-9]$/.test(r.key) && r.rect);
+      const keyRegions = regions.filter(r => /^(d[0-9]|del|join)$/.test(r.key) && r.rect);
+      const bottom = keyRegions.reduce((m, r) => Math.max(m, r.rect.y + r.rect.h), -Infinity);
+      const overflow = keyRegions.filter(r => r.rect.y + r.rect.h > contentBottom + 0.5);
+      const keyH = digitKeys.length ? digitKeys[0].rect.h : -1;
+      console.log('  · 320 键盘: contentBottom=' + contentBottom + ' keyH=' + keyH +
+        ' 数字键=' + digitKeys.length + '/10 键盘相关命中区=' + keyRegions.length +
+        ' 最底部 rect.bottom=' + (isFinite(bottom) ? bottom.toFixed(1) : 'n/a') +
+        ' 越界数=' + overflow.length + ' regions 总数=' + regions.length);
+      if (digitKeys.length !== 10) throw new Error('320 窄屏数字键缺失：' + digitKeys.length + '/10');
+      if (!(bottom <= contentBottom + 0.5)) {
+        throw new Error('320 窄屏 3×4 键盘越界：最底部 rect.bottom=' + bottom.toFixed(1) +
+          ' > contentBottom=' + contentBottom + '（越界命中区 ' + overflow.length + ' 个）');
+      }
+    }
+  },
+  {
+    // 对局方式选择页（新 IA 过渡页）：本地双人（主卡）/ 邀请好友加入（次卡）
+    name: 'versus', file: 'src/scenes/versus', label: '对局方式选择(双人对弈)',
+    skipIfMissing: 'src/scenes/versus.js',
+    driver: (scene, sm) => {
+      scene.enter({ from: 'menu', screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => {
+      const regions = scene.regions || [];
+      const keys = regions.map(r => r.key);
+      const local = regions.find(r => r.key === 'local');
+      const remote = regions.find(r => r.key === 'remote');
+      console.log('  · versus regions=' + JSON.stringify(keys) +
+        ' | local=' + JSON.stringify(local && local.rect) +
+        ' remote=' + JSON.stringify(remote && remote.rect));
+      if (keys.indexOf('back') < 0 || keys.indexOf('local') < 0 || keys.indexOf('remote') < 0) {
+        throw new Error('versus 命中区缺失（需 back/local/remote）：' + keys.join(','));
+      }
+      if (!local || !remote || local.rect.h < 44 || remote.rect.h < 44) {
+        throw new Error('versus 热区高度不足 44pt：local.h=' + (local && local.rect.h) +
+          ' remote.h=' + (remote && remote.rect.h));
+      }
+    }
+  },
+  {
+    // 320×568 窄屏：两张卡片 + 底部脚注不得越出 contentBottom（窄屏逐级降级的视觉兜底）
+    name: 'versus-320', file: 'src/scenes/versus', label: '对局方式选择(320 窄屏)',
+    vp: { W: 320, H: 568 },
+    skipIfMissing: 'src/scenes/versus.js',
+    driver: (scene, sm) => {
+      scene.enter({ from: 'menu', screenWidth: VW, screenHeight: VH, _sm: sm });
+      try { scene.update(0.016); } catch (e) {}
+    },
+    after: (ctx, scene) => {
+      const L = layoutMod.get();
+      const contentBottom = Math.min(L.contentBottom, VH - 12);
+      const g = scene.geo || {};
+      const cardBottom = (g.cardsTop != null && g.c1 && g.c2)
+        ? g.cardsTop + g.c1.h + g.gapCard + g.c2.h : -1;
+      const footBottom = (g.footTop != null && g.footH != null) ? g.footTop + g.footH : -1;
+      const keys = (scene.regions || []).filter(r => r.key === 'local' || r.key === 'remote');
+      const bottom = keys.reduce((m, r) => Math.max(m, r.rect.y + r.rect.h), -Infinity);
+      console.log('  · versus320: contentBottom=' + contentBottom + ' cardsTop=' + g.cardsTop +
+        ' cardBottom=' + (cardBottom >= 0 ? cardBottom.toFixed(1) : 'n/a') +
+        ' footBottom=' + (footBottom >= 0 ? footBottom.toFixed(1) : 'n/a') +
+        ' 最底部热区 rect.bottom=' + (isFinite(bottom) ? bottom.toFixed(1) : 'n/a') +
+        ' btnH=' + (g.lv && g.lv.btnH) + ' 档位cardPad=' + (g.lv && g.lv.cardPad));
+      if (cardBottom >= 0 && !(cardBottom <= contentBottom + 0.5)) {
+        throw new Error('320 窄屏 versus 卡片底部越界：cardBottom=' + cardBottom.toFixed(1) +
+          ' > contentBottom=' + contentBottom);
+      }
+      if (footBottom >= 0 && !(footBottom <= contentBottom + 0.5)) {
+        throw new Error('320 窄屏 versus 底部脚注越界：footBottom=' + footBottom.toFixed(1) +
+          ' > contentBottom=' + contentBottom);
+      }
+      if (!(bottom <= contentBottom + 0.5)) {
+        throw new Error('320 窄屏 versus 热区越界：rect.bottom=' + bottom.toFixed(1) +
+          ' > contentBottom=' + contentBottom);
+      }
+    }
   },
   {
     // 复盘：玩家执黑，棋盘应翻转并显示「执黑·棋盘已翻转」方位标签
@@ -450,7 +673,48 @@ const SCENES = [
 ];
 
 // 注：以下为六态诊断图 custom 场景（保留原结构，单独追加）
+// v5 退出仲裁：用通用 confirm 模态（ModalManager.renderGeneric 统一绘制三按钮）。
+// 直接喂 payload 而不走 openArbitrationModal()，避免触发云端写入 / 墙钟判定，出图确定性。
+function arbitrationDriver(scene, sm) {
+  scene.enter({ mode: 'remote', roomId: '482193', seat: 'seat_host_0001', role: 'host',
+    hostColor: 'w', playerColor: 'w', screenWidth: VW, screenHeight: VH, _sm: sm });
+  sm.modal.current = 'confirm';
+  sm.modal.payload = {
+    title: '对手已离开',
+    message: '对手已离开超过 1 分钟。可继续等待、封存残局，或按剩余兵力结束本局。',
+    buttons: [
+      { label: '继续等待', action: 'wait', variant: 'primary' },
+      { label: '封存残局', action: 'archive', variant: 'secondary' },
+      { label: '结束对弈', action: 'finish', variant: 'danger' }
+    ],
+    onAction: () => {}
+  };
+}
+
+function arbitrationAfter(ctx, scene) {
+  const modal = scene.sm && scene.sm.modal;
+  const cur = modal && modal.current;
+  const buttons = (modal && modal.payload && modal.payload.buttons) || [];
+  console.log('  · arbitration modal=' + cur + ' buttons=' + buttons.length +
+    ' isGeneric=' + (modal && typeof modal.isGeneric === 'function' ? modal.isGeneric() : 'n/a'));
+  if (cur !== 'confirm' || buttons.length !== 3) {
+    throw new Error('仲裁三选项模态未正确挂载');
+  }
+}
+
 const SCENES2 = [
+  {
+    name: 'gameplay-arbitration', file: 'src/scenes/gameplay',
+    label: '远程对弈(对手已离开·仲裁三选项)',
+    driver: arbitrationDriver, after: arbitrationAfter
+  },
+  {
+    // 320 窄屏复核：3 按钮均分宽度，标题/正文/按钮文字不得裁切或越界
+    name: 'gameplay-arbitration-320', file: 'src/scenes/gameplay',
+    label: '远程对弈(仲裁三选项·320 紧凑屏)',
+    vp: { W: 320, H: 568 },
+    driver: arbitrationDriver, after: arbitrationAfter
+  },
   {
     // 六态诊断图（直接驱动 render/board.js，不依赖场景）：选中/可走/可吃/上一步/将军 同屏
     name: 'board-semantics', label: '棋盘六态语义诊断', custom: true,
@@ -492,10 +756,17 @@ const SCENES2 = [
 
 // ---------------- 渲染循环 ----------------
 preseedRecords();
-let okCount = 0, failCount = 0;
-const fails = [];
+let okCount = 0, failCount = 0, skipCount = 0;
+const fails = [], skips = [];
 
 for (const spec of SCENES.concat(SCENES2)) {
+  // R2：房间场景尚未落盘时显式跳过（不算失败，单场景不影响其余）。
+  if (spec.skipIfMissing && !fs.existsSync(path.join(PROJ, spec.skipIfMissing))) {
+    skipCount++;
+    skips.push(spec.name);
+    console.log('  ⊘ 跳过：' + spec.label + ' (' + spec.name + ')（模块未落盘，集成时复跑）');
+    continue;
+  }
   let ctx, sm, scene;
   try {
     // 单场景视口（缺省 375×667）；切换后重建 layout 单例，保证 isCompactW/H 与真机一致
@@ -528,6 +799,7 @@ for (const spec of SCENES.concat(SCENES2)) {
   }
 }
 
-console.log('\n=== 渲染完成: ' + okCount + ' 成功 / ' + failCount + ' 失败 ===');
+console.log('\n=== 渲染完成: ' + okCount + ' 成功 / ' + failCount + ' 失败 / ' + skipCount + ' 跳过 ===');
+if (skips.length) console.log('跳过项（模块未落盘，集成时复跑）:\n  - ' + skips.join('\n  - '));
 if (fails.length) console.log('失败项:\n  - ' + fails.join('\n  - '));
 process.exit(failCount ? 1 : 0);

@@ -25,6 +25,7 @@
  *  - options.skipPiece {row,col}                   跳过该格棋子，供场景层画飞行棋子
  *  - options.activeSquare {row,col}                对应行/列刻度加粗提亮
  *  - options.isCompact                             覆盖紧凑屏判定（缺省读 layout 单例）
+ *  - options.topPiecesUpsideDown:boolean          屏幕上半区棋子旋转 180°（本地双人专用，默认 false）
  */
 'use strict';
 
@@ -184,6 +185,8 @@ function drawBoard(ctx, board, options) {
   var y = o.y || 0;
   var cell = (typeof o.cellSize === 'number' && o.cellSize > 0) ? o.cellSize : 50;
   var flip = !!o.flip;
+  // 本地双人：屏幕上半区棋子旋转 180°（按屏幕行 dr 判定，与 flip / piece.color 无关），默认 false。
+  var topPiecesUpsideDown = !!o.topPiecesUpsideDown;
   var showCoordinates = o.showCoordinates !== false;
   var hideHighlights = !!o.hideHighlights;
   // hideHighlights 默认按补遗 A.4.2「保留选中象牙内环、只压制走法点」；
@@ -356,7 +359,10 @@ function drawBoard(ctx, board, options) {
         var isSelected = !!selected && selected.row === pr && selected.col === pc;
         // 考核态不放大/发光，仅正常绘制；选中象牙内环已在第 5 步绘制
         var glow = isSelected && !hideHighlights;
-        drawPieceWithShadow(ctx, piece.type, piece.color, pcx, pcy, cell, { selected: glow });
+        // 按「屏幕行」判定：dr 0..3 为屏幕上半区；flip 翻转后同一子会换到另一侧，旋转随之改变。
+        var pieceOpts = { selected: glow };
+        if (topPiecesUpsideDown && ps.dr < 4) pieceOpts.rotate180 = true;
+        drawPieceWithShadow(ctx, piece.type, piece.color, pcx, pcy, cell, pieceOpts);
       }
     }
   }
@@ -372,9 +378,11 @@ function drawBoard(ctx, board, options) {
     ctx.stroke();
     ctx.restore();
     if (preview.type) {
+      // preview 也在棋盘上，旋转判定与棋子循环一致（按屏幕行 dr）。
+      var previewOpts = { alpha: typeof preview.alpha === 'number' ? preview.alpha : 0.5 };
+      if (topPiecesUpsideDown && pv.dr < 4) previewOpts.rotate180 = true;
       drawPieceWithShadow(ctx, preview.type, preview.color || 'w',
-        pvx + cell / 2, pvy + cell / 2, cell,
-        { alpha: typeof preview.alpha === 'number' ? preview.alpha : 0.5 });
+        pvx + cell / 2, pvy + cell / 2, cell, previewOpts);
     }
   }
 

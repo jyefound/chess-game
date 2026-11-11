@@ -17,6 +17,7 @@ const C = theme.colors, R = theme.radius;
 const TF = (k) => theme.font(k);
 const rr = util.rr, inRect = util.inRect, drawBtn = util.drawButtonLocal;
 const topbar = require('../render/topbar');
+const { opponentLabel, modeLabel } = require('../data/recordLabels');
 
 const icons = (() => { try { return require('../render/icons'); } catch (e) { return null; } })();
 const piecesRender = require('../render/pieces');
@@ -193,7 +194,7 @@ class RecordsScene {
     // 行1：对手/模式（Subtitle）+ 结果徽章
     ctx.fillStyle = C.textPrimary; ctx.font = TF('subtitle');
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    const opponent = rec.opponent || (rec.mode === 'local' ? '双人对弈' : '人机对战');
+    const opponent = opponentLabel(rec);
     // 徽章占右，标题留宽
     const badge = outcomeBadge(rec);
     ctx.font = TF('micro');
@@ -211,12 +212,21 @@ class RecordsScene {
     const titleMaxW = bx - (contentX + 14) - 8;
     this._ellipsis(ctx, opponent, contentX + 14, y + 25, titleMaxW);
 
-    // 行2：日期 · 步数 · 时长（text-secondary，C7 关键信息不用 tertiary）
-    ctx.fillStyle = C.textSecondary; ctx.font = TF('caption');
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    // 行2：模式标签 · 日期 · 步数 · 时长
+    // 模式标签用 micro 粗体小字 + textSecondary（不用 accent 黄铜，避免与结果徽章混淆），
+    // 与 replay.js meta 卡样式一致；模式段完整可见，其余段用 _ellipsis 截断防止压到右端 chevron。
     const plies = rec.plies != null ? rec.plies : (Array.isArray(rec.movesUci) ? rec.movesUci.length : 0);
-    const meta = `${fmtDate(rec.startedAt)} · ${plies} 步 · ${fmtDuration(rec.durationMs)}`;
-    ctx.fillText(meta, contentX + 14, y + 52);
+    const row2X = contentX + 14;
+    const row2MaxW = contentW - 14 - 30;
+    const modeTxt = modeLabel(rec.mode);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = TF('micro');
+    const modeW = ctx.measureText(modeTxt).width;
+    ctx.fillStyle = C.textSecondary;
+    ctx.fillText(modeTxt, row2X, y + 52);
+    ctx.font = TF('caption');
+    const meta = ` · ${fmtDate(rec.startedAt)} · ${plies} 步 · ${fmtDuration(rec.durationMs)}`;
+    this._ellipsis(ctx, meta, row2X + modeW, y + 52, Math.max(0, row2MaxW - modeW));
 
     // 行3：进行中 info 徽章（仅 ongoing）
     if (badge.label === '进行中') {

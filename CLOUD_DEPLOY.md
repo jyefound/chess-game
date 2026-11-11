@@ -101,7 +101,7 @@
 | 3 | **确定地域并创建 / 选用环境，拿到 env ID** | 地域**不可逆**，须与隐私指引「存储地区」、备案信息一致 |
 | 4 | **填入 `src/config.js` 的 `CLOUD_CONFIG`** | 置 `env = '<env ID>'`、`enabled = true`；其余字段保持默认（见 §4.4） |
 | 5 | **创建两个集合** | `chess_state`、`chess_records`（见 §4.1） |
-| 6 | **配置集合安全规则** | 两集合均设为「仅创建者可读写」的完整 JSON（见 §4.2） |
+| 6 | **配置集合安全规则** | 个人进度两集合 `chess_state` / `chess_records` 均设为「仅创建者可读写」的完整 JSON（见 §4.2）；远程对局第三集合 `chess_rooms` 为房间内共享，见 §12 |
 | 7 | **创建索引** | 见 §4.3 建议（非必须，但 CAS / 分页强烈建议） |
 | 8 | **发布《用户隐私保护指引》** | 微信公众平台填写并**发布**；官方隐私授权弹窗依赖它才真实生效；新增 / 修改收集类型会触发旧用户重新授权 |
 | 9 | **填适龄分级、联系方式、隐私政策 URL** | 托管 `PRIVACY_POLICY.md` 为可访问 URL；填实政策中所有【待填】项；值见 §6.2，**本轮未编造任何具体值** |
@@ -205,7 +205,7 @@ const CLOUD_CONFIG = {
 
 | # | 场景 | 操作 | 期望结果 |
 |---|---|---|---|
-| 1 | 默认关闭 | `enabled:false` / `env:''` 下冷启动 | 六套回归 `327/0` 全绿；云开发控制台无该 openid 的读写、**无文档创建**；设置页显示云同步关闭状态（「关闭后本次不再上传；云端已有副本可删除」）；`publishCheck()` 启动告警 |
+| 1 | 默认关闭 | `enabled:false` / `env:''` 下冷启动 | 十套回归全绿（当前基线见 §12 上方与 `README.md`「测试（回归门禁）」）；云开发控制台无该 openid 的读写、**无文档创建**；设置页显示云同步关闭状态（「关闭后本次不再上传；云端已有副本可删除」）；`publishCheck()` 启动告警 |
 | 2 | 换设备 / 清缓存恢复 | A 设备授权 + 开同步 → 玩到第 4 阵、存若干棋谱 → B 设备（或清缓存后）用同一微信账号进入 | 冷启动 `pull → 逐 key merge → applyRemote 回填 → push`；进度 / 棋谱 / 设置恢复；**不会用本地空数据覆盖云端** |
 | 3 | 多端冲突合并 | 两设备离线各改不同字段（一端解锁关卡、一端收集妙招 / 存棋谱），先后上线 | 单调字段 max / min(>0) / OR / 并集生效；`index.ids` 并集重排、满 50 裁剪；增减型字段按局部 LWW；`rev` CAS 冲突自动重拉合并重试（≤3 次） |
 | 4 | **拒绝授权零云调用** | 在官方隐私弹窗点「拒绝」 | 状态 `denied`；设置页显示「已拒绝授权 · 仅本地模式，可重新开启」；**零云调用**（不 pull / 不 push / 不 init 追踪）；玩法与成绩完全不受影响；可在设置页重新授权 |
@@ -420,7 +420,7 @@ const CLOUD_CONFIG = {
 
 - **已由主理人定稿**（见 §6.0）：`CLOUD_CONFIG` 内部默认值、适龄 8+ 工程默认、`game.json` 不加 `"cloud": true`、`traceUser:false`、已加 `publishCheck()`、设置页版本号 `v2.0`。
 - **已由用户提供（2026-11-08）**：`env` = `freedom-land-d4gv0gs78c0dd7b2f`（C-01）、AppID = `wx5a78cb07bad9cf59`（C-02，与 `project.config.json` 一致且即为此云环境绑定 AppID）；`CLOUD_CONFIG.enabled` 已置 `true`、`env` 已填。
-- **仍需用户提供真实信息 / 平台侧动作**：地域(C-03)、套餐续期(C-04)、隐私政策可访问 URL(C-06)、主体 / 联系方式 / 生效日期(C-08)、公众平台《用户隐私保护指引》填报与发布(C-09 / O-06)。注：创建集合 / 安全规则 / 索引等结构性云端动作已于 2026-11-08 全部完成（详见 §11.4），其中集合+规则+`_openid` 单字段索引由你在微信云开发控制台执行、两个复合索引由 MCP 补齐，无需你再操作；仅隐私指引发布与备案仍需你侧完成。
+- **仍需用户提供真实信息 / 平台侧动作**：地域(C-03)、套餐续期(C-04)、隐私政策可访问 URL(C-06)、主体 / 联系方式 / 生效日期(C-08)、公众平台《用户隐私保护指引》填报与发布(C-09 / O-06)。注：创建集合 / 安全规则 / 索引等结构性云端动作已于 2026-11-08 全部完成（详见 §11.4），其中集合+规则+`_openid` 单字段索引由你在微信云开发控制台执行、两个复合索引由 MCP 补齐，无需你再操作；仅隐私指引发布与备案仍需你侧完成；远程对局另需《用户隐私保护指引》新增「对局 / 房间数据」收集类型与分享能力申报（若平台要求），见 §12（**待用户执行，尚未执行**）。
 - 结论重申：第八轮未创建任何云端资源；2026-11-08 代码侧已接线（`enabled:true` + `env` 已填），但集合 / 安全规则尚未创建。
 
 ---
@@ -447,7 +447,7 @@ const CLOUD_CONFIG = {
      "write": "doc._openid == auth.openid"
    }
    ```
-   （等价预设：部分控制台提供「仅创建者可读写」；但直接粘贴上面两段式表达式最稳妥，与 `src/core/cloud.js` 的 `where({_openid:'{openid}'})` 强制服务端隔离一致。）
+   （等价预设：部分控制台提供「仅创建者可读写」——该预设针对上述个人进度两集合；但直接粘贴上面两段式表达式最稳妥，与 `src/core/cloud.js` 的 `where({_openid:'{openid}'})` 强制服务端隔离一致。远程对局第三集合见 §12。）
 4. （**可选 · 性能优化，跳过不影响同步功能**）建索引：进入集合 → 「索引管理」→「新建索引」，在「索引字段」按下方 JSON 填写：
    - `chess_records` 复合索引 A：`{"_openid":1,"key":1}`（支撑 CAS `where({_openid,key,rev})`）
    - `chess_records` 复合索引 B：`{"_openid":1,"updatedAt":1}`（支撑分页 / 排序）
@@ -471,6 +471,93 @@ const CLOUD_CONFIG = {
   - 两集合安全规则均为 `CUSTOM`：`{"read":"doc._openid == auth.openid","write":"doc._openid == auth.openid"}`（与 `src/core/cloud.js` 的 `where({_openid:'{openid}'})` 服务端隔离一致；`MCP getResourcePermission` 回读已确认）。
   - 索引：`chess_state` = `_id_` + `_openid_1`（单字段，已覆盖主查询）；`chess_records` = `_id_` + `_openid_1` + `idx_openid_key`（`_openid,key`）+ `idx_openid_updatedAt`（`_openid,updatedAt`）。复合索引由 MCP 补齐，回读确认。
   - **关于 create 规则告警**：`getResourcePermission` 返回的 `createRuleDocWarning` 是 CloudBase-baas 通用提示（`create` 时 `doc.*` 不可用）。本环境是**微信云开发**，`auth.openid`/`_openid` 身份模型以 `write` 整段（含 create）判定，且平台在写入前自动注入 `_openid`，故该告警对微信云开发不适用，规则保持原样即可。
-- **测试侧**：9 套回归全绿（test 9 / integration 59 / engine 62 / endgame 100 / endgame-scene 86 / gameplay 11 / cloud 111 / sync 177 / recovery 86）；本批次重跑 cloud 111 / sync 177 / recovery 86 / test 9 全绿；`publish-check` 默认退出 0。
-- **待补（按你要求延后）**：提审材料 —— `PRIVACY_POLICY.md`【待填】、`WECHAT_PUBLISH_GUIDE.md` 公众平台《用户隐私保护指引》填报与发布、备案。
+  - **本批次（远程双人对弈）新增第三集合** `chess_rooms` 已落地：规则 `{"read":true,"create":"doc._openid == auth.openid","update":true,"delete":"doc._openid == auth.openid"}`、索引 `_id_` / `_openid_1` / `idx_roomId`（唯一）/ `idx_status_expireAt`（status,expireAt），MCP 回读已确认；既有 `chess_state` / `chess_records` 两集合的规则与存量数据不受影响。详见 §12。
+- **测试侧（当前基线）**：十套回归全绿 —— `test.js`(9 项检查) / `test-integration.js`(96/0) / `test-engine.js`(62/0) / `test-endgame.js`(100/100) / `test-endgame-scene.js`(86/0) / `test-gameplay.js`(98/0) / `test-room.js`(153/0) / `test-cloud.js`(111/0) / `test-sync.js`(177/0) / `test-recovery.js`(86/0)，另 `tools/verify-round2.js`(81/0)；详见 `README.md`「测试（回归门禁）」。`publish-check` 默认退出 0、`--strict` 因 6 处【待填】退出 1。
+- **待补（按你要求延后）**：提审材料 —— `PRIVACY_POLICY.md`【待填】、`WECHAT_PUBLISH_GUIDE.md` 公众平台《用户隐私保护指引》填报与发布（**须新增「对局 / 房间数据」收集类型，含双方各自自填的昵称**）、分享能力申报（若平台要求）、备案；真机验收清单见 §12.6。以上均为**待用户 / 平台侧执行，尚未执行**。
 - `--strict` 当前 1 项阻断：`PRIVACY_POLICY.md` 6 处【待填】（已按你要求延后，非代码/环境阻断项）。
+
+---
+
+## 12. 远程双人对弈（chess_rooms · 本批次新增）
+
+> 本节对应主菜单「双人对弈」单入口 → 对局方式选择页 `versus`（`src/scenes/versus.js`）→ 其次级入口「邀请好友加入」→ 新场景 `src/scenes/room.js`。云端集合 / 规则 / 索引**已由 MCP 直连落地并回读校验**（属「已落地」）；真机验收、平台侧《用户隐私保护指引》填报与分享能力申报**仍待执行**（属「待真机验证 / 待平台侧执行」）。
+> **时间线**：§0 / §7 / §10 为云端化交付轮次的历史结论（当时未创建任何云端资源）；§11 起为 2026-11-08 provisioning 与本批次远程对局批次的后续落地，按时间线并存，不互相覆盖。
+> **v5 增量（本批次已完整落地）**：房间文档新增**双方各自自填的昵称**（`hostNick` / `guestNick`，≤12 字、非微信昵称）、局数与比分、在线状态 / 心跳、退出仲裁与封存残局续局；棋谱区分三种模式且远程棋谱记录对端自填昵称、远程对局也写入本地棋谱。字段全文见 §12.4，合规披露见 `PRIVACY_POLICY.md` §一 / §二 / §四 / §八 / §十三 / §十四 / 附录与 `src/data/privacy.js`；技术架构见 `ARCHITECTURE.md` §8.12。旧版关于房间昵称的否定式表述已全部更正为「含双方自填昵称、不含微信昵称」。
+
+### 12.1 集合创建过程与安全规则全文
+
+- 集合 `chess_rooms`（一房间 1 文档），位于微信云开发环境 `freedom-land-d4gv0gs78c0dd7b2f`（绑定 AppID `wx5a78cb07bad9cf59`）。
+- 自定义安全规则（`getResourcePermission` 回读为 `CUSTOM`，已确认）：
+
+```json
+{
+  "read": true,
+  "create": "doc._openid == auth.openid",
+  "update": true,
+  "delete": "doc._openid == auth.openid"
+}
+```
+
+- **为何 `read:true`**：好友需跨 `openid` 用 `.watch()` 实时监听同一房间文档的着法变化，这是实时推送的硬性前提；个人进度两集合「仅本人可读」无法满足跨用户监听。代价是「持有 / 可查询到房间文档者即可读该房间数据」，因此必须以高熵房间码收敛可见范围，并向用户如实披露（见 §12.5）。
+- **为何 `update:true`**：加入方（非房主）也要写入自己的落子与席位，无法用 `doc._openid == auth.openid` 限定；并发写由 `rev` 版本号 CAS 在应用层抑制。
+- **为何 create / delete 限房主**：`create` 与 `delete` 用 `doc._openid == auth.openid`，保证只有房主能建房、删房，避免他人伪造或删除他人房间。
+- **两条平台告警为何对微信云开发不适用**：
+  - `createRuleDocWarning`（提示 `create` 时 `doc.*` 不可用）：本环境是微信云开发，`_openid` 在安全规则判定**之前**由平台自动注入文档，create 规则可正常比较 `doc._openid` 与 `auth.openid`；该告警来自 CloudBase-baas 通用模型，不适用（与 §11.4 既有两集合的结论一致），规则保持原样。
+  - `docIdWriteRuleWarning`（提示按 `_id` 定位的 `doc(id).update()` 不走安全规则）：客户端**一律使用 `where({roomId, rev}).update()` 条件更新**，不使用 `doc(id).update()` / `doc().set()`，因此不经过该告警所指的绕过路径；写入仍落在安全规则与 CAS 约束内。
+
+### 12.2 索引清单与回读校验结果
+
+`describeCollection` 回读确认 `chess_rooms` 共 **4 个索引**：
+
+| 索引名 | 字段 | 属性 | 回读 |
+|---|---|---|---|
+| `_id_` | `_id` | 系统默认 | 已确认 |
+| `_openid_1` | `_openid` | 单字段 | 已确认 |
+| `idx_roomId` | `roomId` | **唯一** | 已确认 |
+| `idx_status_expireAt` | `status`, `expireAt` | 复合（支撑状态 / 过期查询） | 已确认 |
+
+### 12.3 与既有两集合的隔离（独立通道）
+
+- 规则变更**不影响** `chess_state` / `chess_records`：两集合安全规则保持 `{"read":"doc._openid == auth.openid","write":"doc._openid == auth.openid"}` 不变，存量文档结构、键值与同步逻辑零改动；§3 / §4 / §5 中「创建两个集合」「仅用 2 个集合」均指这条个人进度链路，本批次新增的 `chess_rooms` 是独立的第三集合。
+- `src/core/room.js` 是**独立通道**：直连 `wx.cloud.database()`（含 `.watch()`），**绝不经过** `src/core/sync.js` 的个人进度同步，也不经过 `src/core/storage.js` 的 `addWriteHook` 写 hook 与 `KEY_RE` 键名白名单。若房间写入误走 `sync.js` 的写 hook，会被当成业务 key 登记进 `pendingQueue`、经 `mergeKey` 合并并 `applyRemote` 回填本地，**污染棋谱 / 设置 / 残局进度等个人存档**，甚至把对局着法镜像成 `chess_records` 文档——这是两条链路必须分离的根本原因。
+- 删除链路：`sync.requestDeleteAll()` 已扩展为在清理个人进度副本的同时调用 `room.deleteAllRooms()`，删除本人创建的房间；「删除云端数据」的二次确认文案已同步说明会一并删除本人房间。
+
+### 12.4 同步机制、数据字段与红线
+
+- 房主建房生成 **6 位数字房间码**（`10^6` 组合），通过 `wx.shareAppMessage` 分享卡片（`query: room=xxxxxx`）或好友手动输码加入；双机**各用自己设备、不共用同一屏幕**，各端固定看自己执棋色的一侧，全程不随回合翻转。
+- 同步：`movesUci` 权威着法日志 + `rev` 版本号 CAS + `.watch()` 实时推送 + **2.5s 轮询兜底**；房间 **6h 过期**（`expireAt`），无服务端定时清理，靠前端惰性判定 + 房主删除 / 「删除云端数据」触发清理。
+- 文档字段（`chess_rooms` v5，一房间 1 文档，`src/core/room.js` 的 `createRoom()` 在 `add()` 里一次性写入）：
+  - 基础：`_id` / `_openid`（房主，**平台注入**、客户端绝不显式写）、`roomId`、`hostSeat` / `guestSeat` 随机席位串、`hostColor`、`status`（`waiting` / `playing` / `finished` / `archived` / `abandoned`）、`movesUci`、`turn`、`rev`、`lastSeat`、`result` / `resultReason`、`schemaVersion`、`createdAt` / `updatedAt` / `expireAt`；
+  - **双方自填昵称**：`hostNick` / `guestNick`（建房 / 加入时本人输入，≤12 字、去控制字符，非微信昵称；用途仅房间内展示与棋谱显示对手，同一房间内双方可见）；
+  - 局数与比分：`maxGames`（0=不限）、`gameIndex`、`gamesPlayed`、`hostScore`、`guestScore`（平局不计）；
+  - 在线态：`hostPresent` / `guestPresent`、`hostLeftAt` / `guestLeftAt`、`hostOnlineAt` / `guestOnlineAt`（心跳维护，仅用于判断「对方是否已退出」）；
+  - 封存与保留：`archived` / `archivedMovesUci`（完整着法快照）/ `archivedAt` / `archivedBy`、`keepUntil`（双方均退出后的保留截止）。
+  - **房间文档含双方用户自填昵称**；**仍不含微信头像、微信昵称、手机号、位置、通讯录**。`seat` 是随机串，**不是 `openid` 明文**。
+- **未变的既有机制**：`rev` 版本号 CAS（`where({roomId, rev}).update()` 防并发覆盖）、`_openid` 平台注入、`idx_roomId` 唯一索引、`expireAt` 6 小时过期（前端惰性判定、无服务端定时清理）均保持原样；安全规则 `{"read":true,"create":"doc._openid == auth.openid","update":true,"delete":"doc._openid == auth.openid"}` 与 4 个索引见 §12.1 / §12.2。
+- **v5 功能对应字段**：双方自填昵称（`joinRoom(code,{nick})` 写入 `guestNick`）、局数设置（`setMaxGames`，hub 可选不限 / 1 / 3 / 5 / 10 局）、退出仲裁（`markLeft()` 写 `present=false + leftAt`；轮到退出方出棋超 `leaveTimeoutMs` 60s 墙钟后未退出方可选继续等待 / 封存残局 / 结束对弈，按剩余兵力判定、退出方永不被判胜）、双方均退出保留 `bothLeftKeepMs`（10 分钟）后自动解散并封存残局不判成绩、封存残局 `archiveKeepMs`（设计 7 天，前端惰性判定）供房主 `createRoom({seedMovesUci})` 续局。封存残局本地离线索引键名含大写字母，不匹配 `sync.js` 的 `KEY_RE`，天然不被镜像进 `chess_records`。
+- **零云函数限制的最终一致性兜底**：`bothLeftKeepMs`（10 分钟）到期**不会由服务端定时器精确执行**。任一端重新进入房间页时，`src/scenes/room.js` 的 `_loadArchived()` 先调用 `room.sweepAbandoned()` 按 `keepUntil` 补判超时房（CAS 写 `archived=true` / `archivedMovesUci=movesUci` / `archivedAt` / `status='abandoned'` / `rev+1`，**不写 `result` / `resultReason`，即不判成绩**），再调用 `listArchivedRooms()`；`sweepAbandoned()` 幂等，重复扫描同一房不会二次封存。两端均退出且无人回来时，补判延后到有人回来或 6h 过期惰性判定为止。协议侧断言见 `test-room.js` §24，场景侧接线见 `src/scenes/room.js` 的 `_loadArchived()`。
+- **红线全部保持，未引入**：`wx.request` / `wx.login` / `wx.getUserProfile` / `wx.getUserInfo` / `scope.userInfo` / `fetch` / `XMLHttpRequest` / DOM / eval / 云函数 / 外部 HTTP。新增仅用 `wx.cloud.database()`（含 `.watch()`）、`wx.shareAppMessage` / `wx.showShareMenu` / `wx.onShareAppMessage` / `wx.setClipboardData` / `wx.getLaunchOptionsSync` / `wx.getEnterOptionsSync` / `wx.onShow(res.query)`。防沉迷仍由微信健康系统统一实施。
+
+### 12.5 隐私影响与《用户隐私保护指引》（待用户执行的平台侧动作）
+
+- 隐私影响：`read:true` 意味着「持有 / 可查询到房间文档者可读该房间数据」；好友加入后，同一房间内双方各自可见对方的 `_openid` 标识、对局着法 / 结果，以及**双方各自自填的昵称**（`hostNick` / `guestNick`，≤12 字、非微信昵称，仅用于房间内展示与棋谱显示对手）。房间文档**含双方自填昵称**，仍不含微信头像 / 微信昵称 / 手机号 / 位置 / 通讯录。这与旧版关于房间昵称的否定式表述直接冲突，已在 `PRIVACY_POLICY.md`（§一 / §二 / §八 / §十三 / §十四 / 附录）、`ARCHITECTURE.md` §8.12、`src/data/privacy.js` 运行时文案中如实更正；`WECHAT_PUBLISH_GUIDE.md` 亦据此补充提审前待办。在线状态 / 心跳、退出仲裁、封存残局与棋谱模式区分的完整披露见 `PRIVACY_POLICY.md` §十三 / §十四。
+- **待用户在微信公众平台执行的动作（尚未执行，不得写成已完成）**：
+  1. 《用户隐私保护指引》**新增 / 变更收集类型**：补「对局 / 房间数据」（房间码、着法、结果、时间、席位标识、平台 `openid`，**以及双方各自自填的昵称**），并说明「同一房间内对手可见」的共享范围、昵称仅用于房间内展示与棋谱显示对手、房间 6h 过期与封存残局设计保留 7 天；
+  2. 若平台要求，完成**分享能力**（`wx.shareAppMessage` / `wx.showShareMenu`）的申报 / 说明；
+  3. **发布**修改后的指引（会触发旧用户重新授权，见 O-06 / C-09），并核对与 `PRIVACY_POLICY.md` 文本一致。
+- 无云函数 ⇒ **无法在服务端校验走子合法性或做权威反作弊**，靠高熵房间码 + `rev` CAS + 席位串在应用层识别；这是好友休闲对弈可接受的取舍，已在 `PRIVACY_POLICY.md` §十三如实披露，不夸大、不隐瞒。
+
+### 12.6 真机验收清单（待真机验证）
+
+- [ ] 分享卡片 `query: room=xxxxxx` 冷启动（`wx.getLaunchOptionsSync` / `wx.getEnterOptionsSync`）与热启动（`wx.onShow(res.query)`）均能带房间码进入房间页；
+- [ ] 双机落子与回合一致：任一端走子后对端经 `.watch()` 实时收到，棋盘与轮次一致；
+- [ ] 结束态一致：将杀 / 和棋 / 认输在两端呈现一致结果；
+- [ ] 后台回前台重连：切后台再回前台，`.watch()` 断线后由 2.5s 轮询兜底补齐着法，不错步、不重复；
+- [ ] `.watch()` 在微信小游戏端真机可用性（小游戏基础库对实时数据推送的支持情况待真机确认）；
+- [ ] 6h 过期：构造 `expireAt` 已过的房间，前端惰性判定为过期且不可再加入；
+- [ ] 删除云端数据：设置 → 账号与隐私 → 删除云端数据后，本人创建的 `chess_rooms` 文档被清理、个人进度副本写墓碑；
+- [ ] 本地双人固定方向：默认白在屏幕下方、全程不随回合翻转，仅手动调转且持续保持；上方一侧棋子旋转 180° 朝上；远程对局不污染该行为。
+- [ ] v5 双方自填昵称：建房 / 加入各填 ≤12 字昵称，房间内双方可见彼此昵称；棋谱列表与回放页显示「人机对战 / 本地双人 / 远程对弈」模式标签，远程棋谱对手名显示对端自填昵称（无昵称回落「远程对手」）；
+- [ ] v5 局数与比分：hub 设 1 / 3 / 5 / 10 局或不限，房间内累计双方胜局、平局不计；
+- [ ] v5 退出仲裁：一方退出后席位保留可重新加入；轮到退出方出棋超 60s 墙钟，另一方可选继续等待 / 封存残局 / 结束对弈（按剩余兵力判定、退出方永不被判胜）；双方均退出保留 10 分钟后自动解散并封存残局、不判成绩；
+- [ ] v5 封存续局：`listArchivedRooms()` 按 `_openid` 只列本人房主创建的封存房，房主重开新房间可选「继续残局」（`seedMovesUci` 恢复局面）或「重新开始」。

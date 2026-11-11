@@ -19,6 +19,7 @@ const TF = (k) => theme.font(k);
 const rr = util.rr, inRect = util.inRect, drawBtn = util.drawButtonLocal;
 const layout = require('../core/layout');
 const topbar = require('../render/topbar');
+const { opponentLabel, modeLabel } = require('../data/recordLabels');
 const ChessGame = require('../core/game');
 const Board = require('../core/board');
 const boardRender = require('../render/board');
@@ -213,21 +214,33 @@ class ReplayScene {
     ctx.fillStyle = C.surface1; rr(ctx, metaX, metaY, metaW, metaH, R.btn); ctx.fill();
     ctx.strokeStyle = C.border; ctx.lineWidth = 1;
     rr(ctx, metaX + 0.5, metaY + 0.5, metaW - 1, metaH - 1, R.btn); ctx.stroke();
-    const opponent = this.record.opponent || (this.record.mode === 'local' ? '双人对弈' : '人机对战');
-    ctx.fillStyle = C.textPrimary; ctx.font = TF('subtitle');
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText(opponent, metaX + 14, metaY + 18);
-    ctx.fillStyle = C.textSecondary; ctx.font = TF('caption');
-    const total = this.total();
-    ctx.fillText(`${fmtDate(this.record.startedAt)} · ${total} 步 · ${fmtDuration(this.record.durationMs)}`, metaX + 14, metaY + 38);
-    // 结果徽章（右）
+    // 结果徽章先算宽度，供行1/行2 预留右侧空间（徽章保持实底语义色，不动）
     const badge = outcomeBadge(this.record);
     ctx.font = TF('micro');
     const bw = ctx.measureText(badge.label).width + 20;
     const bx = metaX + metaW - 12 - bw, by = metaY + metaH / 2 - 11;
-    // 语义色实底 + textOnAccent 深字（≥5.4:1），统一胜/和/负/进行中
+    const textMaxW = Math.max(0, bx - (metaX + 14) - 8);
+    // 行1：对手名（远程为对端昵称；缺失时 opponentLabel 按 mode 回落），截断到徽章左侧
+    const opponent = opponentLabel(this.record);
+    ctx.fillStyle = C.textPrimary; ctx.font = TF('subtitle');
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    this._ellipsis(ctx, opponent, metaX + 14, metaY + 18, textMaxW);
+    // 行2：模式标签 · 日期 · 步数 · 时长（与 records.js 列表卡片样式一致）
+    // 模式标签 micro 粗体小字 + textSecondary（不用 accent 黄铜），其余 caption + textSecondary，
+    // 模式段完整可见，其余段 _ellipsis 截断，防止文字压到右侧结果徽章。
+    const total = this.total();
+    const modeTxt = modeLabel(this.record.mode);
+    ctx.font = TF('micro');
+    const modeW = ctx.measureText(modeTxt).width;
+    ctx.fillStyle = C.textSecondary;
+    ctx.fillText(modeTxt, metaX + 14, metaY + 38);
+    ctx.font = TF('caption');
+    const meta = ` · ${fmtDate(this.record.startedAt)} · ${total} 步 · ${fmtDuration(this.record.durationMs)}`;
+    this._ellipsis(ctx, meta, metaX + 14 + modeW, metaY + 38, Math.max(0, textMaxW - modeW));
+    // 结果徽章（右，语义色实底 + textOnAccent 深字 ≥5.4:1，统一胜/和/负/进行中）
     ctx.fillStyle = badge.color; rr(ctx, bx, by, bw, 22, 999); ctx.fill();
-    ctx.fillStyle = C.textOnAccent; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = C.textOnAccent; ctx.font = TF('micro');
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(badge.label, bx + bw / 2, by + 11);
 
     // ---- 棋盘（只读，用 getBoardMetrics 真居中）----
@@ -395,6 +408,14 @@ class ReplayScene {
     if (hex.charAt(0) !== '#') return hex;
     const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
     return `rgba(${r},${g},${b},${a})`;
+  }
+
+  // 文本按最大宽度截断（与 records.js 一致），用于行1 对手名 / 行2 元信息防溢出
+  _ellipsis(ctx, text, x, y, maxW) {
+    let t = String(text || '');
+    if (ctx.measureText(t).width <= maxW) { ctx.fillText(t, x, y); return; }
+    while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+    ctx.fillText(t + '…', x, y);
   }
 
   onTouchStart(x, y) {

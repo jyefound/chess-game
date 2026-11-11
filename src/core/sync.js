@@ -24,6 +24,7 @@
 var config = require('../config');
 var storage = require('./storage');
 var cloud = require('./cloud');
+var room = require('./room');   // v4 远程房间独立通道（room.js 只 require config/cloud，不与本层循环）
 
 var CLOUD = config.CLOUD_CONFIG;
 var KEYS = config.STORAGE_KEYS;
@@ -767,6 +768,14 @@ function requestDeleteAll() {
     for (var j = 0; j < local.length; j++) if (keys.indexOf(local[j]) < 0) keys.push(local[j]);
     var tasks = [];
     for (var i = 0; i < keys.length; i++) tasks.push(cloud.markDeleted(keys[i]));
+    // v4：删除云端数据也清掉当前用户创建的远程房间（chess_rooms 独立通道）。
+    // room 不可用时静默跳过；deleteAllRooms 永远返回已决议 Promise、绝不抛/不 reject，
+    // 这里再包一层 catch 兜底，绝不改变 requestDeleteAll 的返回值契约。
+    try {
+      if (room && typeof room.deleteAllRooms === 'function') {
+        tasks.push(Promise.resolve(room.deleteAllRooms()).catch(function () { return null; }));
+      }
+    } catch (e) {}
     return Promise.all(tasks);
   }).then(function () {
     // A5：末尾物理删 chess_state 用户文档（同步元数据/opId），与「删除后无法恢复」承诺一致。

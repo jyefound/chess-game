@@ -215,6 +215,11 @@ section('B. 多视口渲染 / 命中区 / 文本边界 / scrollY 钳制');
     { name: 'settings', Class: SettingsScene },
     { name: 'endgameMap', Class: EndgameMapScene }
   ];
+  // R2：'room' 场景由 impl-room-ui 落盘；未落盘则不加进多视口渲染矩阵（保持原有断言编号）。
+  let RoomScene = null;
+  try { RoomScene = R('src/scenes/room'); } catch (e) { RoomScene = null; }
+  if (RoomScene) scenes.push({ name: 'room', Class: RoomScene });
+  else console.log('  · 跳过：room 场景多视口渲染项（模块未落盘，集成时复跑）');
   freshStorage();
   storage.saveEndgame({ unlockedLevel: 6, cleared: {
     1: { stars: 3, bestTimeMs: 12300 }, 2: { stars: 2, bestTimeMs: 20900 },
@@ -356,6 +361,58 @@ section('C. 设置项文案 / 动作语义');
   const src = fs.readFileSync(path.join(PROJ, 'src/scenes/settings.js'), 'utf8');
   ok('P1-10 共享面板接入 pressedKey 按压原语',
     /pressedKey|drawPressed/.test(src), 'renderSettingsPanel 未发现按压消费');
+}
+
+// ===========================================================================
+section('D. R2 房间场景 / 菜单并列按钮（能力防御）');
+// ===========================================================================
+{
+  // 契约要求 SHOT_CASES 含 room 的 hub / joining 两项。
+  // 注意：本文件基线（66 项断言）并不存在 SHOT_CASES（全项目 Grep 0 匹配），
+  // 故按契约意图新建，并与 render-shots.js 的 shot 清单做跨文件一致性校验。
+  const SHOT_CASES = [
+    { name: 'room-hub', label: '房间(hub)', enter: { from: 'menu' } },
+    { name: 'room-joining', label: '房间(joining)', enter: { from: 'share', joinCode: '123456' } }
+  ];
+  const shotsSrc = fs.readFileSync(path.join(PROJ, 'tools/render-shots.js'), 'utf8');
+  ok('D1 SHOT_CASES(room hub/joining) 与 render-shots.js shot 清单一致',
+    SHOT_CASES.every(c => shotsSrc.indexOf("name: '" + c.name + "'") >= 0),
+    '缺失=' + SHOT_CASES.filter(c => shotsSrc.indexOf("name: '" + c.name + "'") < 0).map(c => c.name).join(','));
+
+  let RoomSceneD = null;
+  try { RoomSceneD = R('src/scenes/room'); } catch (e) { RoomSceneD = null; }
+  if (!RoomSceneD) {
+    console.log('  ⊘ 跳过：room 场景 SHOT_CASES enter+render 冒烟（模块未落盘，集成时复跑）');
+  } else {
+    for (const c of SHOT_CASES) {
+      let err = null;
+      try {
+        const sc = new RoomSceneD();
+        sc.enter(Object.assign({ screenWidth: 375, screenHeight: 667 }, c.enter));
+        sc.render(makeCtx(375, 667), 375, 667);
+      } catch (e) { err = e; }
+      ok('D2 ' + c.name + ' enter+render 无异常', !err,
+        err ? (err.stack || err.message).split('\n').slice(0, 2).join(' | ') : '');
+    }
+  }
+
+  // 菜单 sec2Y 几何：静态检查 4 条赋值语句未被改动（当前 menu.js 即可真验）。
+  const menuSrc = fs.readFileSync(path.join(PROJ, 'src/scenes/menu.js'), 'utf8');
+  ok('D3 menu.js priY/sec1Y/sec2Y/rowY 几何赋值语句未被改动',
+    /sec2Y\s*=\s*rowY\s*-\s*rowGap\s*-\s*secH/.test(menuSrc) &&
+    /sec1Y\s*=\s*sec2Y\s*-\s*\(gap\s*-\s*2\)\s*-\s*secH/.test(menuSrc) &&
+    /priY\s*=\s*sec1Y\s*-\s*gap\s*-\s*priH/.test(menuSrc) &&
+    /rowY\s*=\s*contentBottom\s*-\s*8\s*-\s*rowH/.test(menuSrc),
+    '几何赋值缺失（基线被改动）');
+  // D4（IA 变更后）：菜单改为单入口 'versus' → 对局方式选择页；旧并列双按钮（_splitBtn）已移除。
+  // 无条件断言（不再走「跳过」分支）：新 IA 已落盘，属真实验证。
+  ok('D4 menu.js 为单入口 "versus"（_mainBtn 接线）且不再含 _splitBtn',
+    /['"]versus['"]/.test(menuSrc) &&
+    /_mainBtn\([^)]*['"]versus['"]/.test(menuSrc) &&
+    !/_splitBtn/.test(menuSrc),
+    'versus key=' + /['"]versus['"]/.test(menuSrc) +
+    ' _mainBtn(versus)=' + /_mainBtn\([^)]*['"]versus['"]/.test(menuSrc) +
+    ' _splitBtn残留=' + /_splitBtn/.test(menuSrc));
 }
 
 console.log('\n============================================================');

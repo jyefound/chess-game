@@ -843,3 +843,6 @@ module.exports.GROUPS = GROUPS;
 // 账号与隐私：供 gameplay.js settingsDrawer 分支分发，及回归脚本断言动态状态文案。
 module.exports.runAccountAction = runAccountAction;
 module.exports.authStatusHint = authStatusHint;
+// 基本资料昵称读写（供 gameplay 记录远程对端昵称 / 棋谱链路复用，仅导出不改实现）
+module.exports.readProfile = readProfile;
+module.exports.cleanNickname = cleanNickname;
