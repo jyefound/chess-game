@@ -441,6 +441,20 @@ module.exports.MOTION = tapMod.MOTION;
 module.exports.ModalManager = ModalManager;
 module.exports.BannerManager = BannerManager;
 module.exports.theme = theme;
+const BASE_THEME_COLORS = Object.assign({}, theme.colors);
+function applyTheme(themeId) {
+  let palettes = null;
+  try { palettes = require('../core/themes'); } catch (e) { palettes = null; }
+  const overrides = palettes && palettes.getPalette ? palettes.getPalette(themeId) : null;
+  const keys = Object.keys(BASE_THEME_COLORS);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    theme.colors[k] = overrides && overrides[k] ? overrides[k] : BASE_THEME_COLORS[k];
+  }
+  theme.active = (themeId === 'light' || themeId === 'kids') ? themeId : 'dark';
+  return theme.active;
+}
+module.exports.applyTheme = applyTheme;
 // 供场景自绘复用的小工具
 module.exports.util = {
   rr, inRect, wrapLocal, withShadow, drawButtonLocal, now,

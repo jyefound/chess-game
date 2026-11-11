@@ -35,6 +35,8 @@ jobs:
           node test-engine.js
           node test-mechanics.js
           node test-personal-center.js
+      - name: Theme tests
+        run: node test-theme.js
       - name: Gameplay and data regressions
         run: |
           node test-integration.js
