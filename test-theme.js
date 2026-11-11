@@ -1,0 +1,16 @@
+const assert=require('assert');
+const themes=require('./src/core/themes');
+const Settings=require('./src/scenes/settings');
+const M=require('./src/scenes/manager');
+assert.deepStrictEqual(Settings.applySettingKey('theme',{},'dark').patch,{theme:'dark'});
+assert.deepStrictEqual(Settings.applySettingKey('theme',{},'light').patch,{theme:'light'});
+assert.deepStrictEqual(Settings.applySettingKey('theme',{},'kids').patch,{theme:'kids'});
+assert.notStrictEqual(themes.getPalette('light').bgBase,themes.getPalette('kids').bgBase);
+assert.notStrictEqual(themes.getPalette('light').textPrimary,themes.getPalette('light').bgBase);
+assert.notStrictEqual(themes.getPalette('kids').textPrimary,themes.getPalette('kids').bgBase);
+assert.strictEqual(themes.getPalette('unknown'),null);
+const original=M.theme.colors.bgBase;
+M.applyTheme('light'); assert.strictEqual(M.theme.colors.bgBase,themes.getPalette('light').bgBase);
+M.applyTheme('kids'); assert.strictEqual(M.theme.colors.bgBase,themes.getPalette('kids').bgBase);
+M.applyTheme('dark'); assert.strictEqual(M.theme.colors.bgBase,original);
+console.log('Theme tests passed (10 assertions).');

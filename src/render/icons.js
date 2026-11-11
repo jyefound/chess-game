@@ -107,6 +107,11 @@ var PATHS = {
     for (var i = 0; i < pins.length; i++) _strokePoly(c, [[pins[i][0], pins[i][1]], [pins[i][2], pins[i][3]]]);
   },
   // 双人：2 个圆（错位）+ 肩部弧线
+  // 个人资料：头像轮廓（圆形头部 + 肩部弧线）
+  user: function (c) {
+    c.beginPath(); c.arc(12, 8, 3.5, 0, Math.PI * 2); c.stroke();
+    c.beginPath(); c.moveTo(4, 20); c.quadraticCurveTo(4, 13, 12, 13); c.quadraticCurveTo(20, 13, 20, 20); c.stroke();
+  },
   twoPlayers: function (c) {
     c.beginPath(); c.arc(9, 8, 3, 0, Math.PI * 2); c.stroke();
     c.beginPath(); c.arc(16, 8.5, 2.6, 0, Math.PI * 2); c.stroke();

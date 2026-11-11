@@ -117,6 +117,7 @@ const GameContext = {
     const config = lazyRequire('./config');
     const sysScale = (config && typeof config.getFontScale === 'function') ? config.getFontScale() : 1;
     const prefScale = s.fontSize === 'large' ? 1.125 : (s.fontLarge ? 1.125 : 1);
+    if (M && typeof M.applyTheme === 'function') M.applyTheme(s.theme || 'dark');
     M.theme.setFontScale(Math.max(prefScale, sysScale));
     const sm = this.getSceneManager();
     if (sm) {

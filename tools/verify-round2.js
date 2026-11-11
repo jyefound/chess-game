@@ -11,7 +11,7 @@
  *      - 所有可见命中区高度 ≥44pt
  *      - 文本矩形不越出视口（诊断统计）
  *      - 阵图 scrollY 首帧被钳制在 [0, maxScroll]
- *   C. 设置项文案 / 动作语义（三组命名、自动覆盖确认、浅色主题不可点）
+ *   C. 设置项文案 / 动作语义（三组命名、自动覆盖确认、三套主题可切换）
  *
  * 说明：使用 Proxy 版轻量 ctx（吸收全部 Canvas 调用），不依赖 @napi-rs/canvas；
  * measureText 按当前 font 的字号近似，保证大字号下能真实反映文本变宽。
@@ -341,17 +341,22 @@ section('C. 设置项文案 / 动作语义');
   ok('P1-12 关闭自动覆盖直接生效',
     !!(offRes.patch && offRes.patch.autoPrune === false), JSON.stringify(offRes));
 
-  // P1-11：浅色主题不再注册可点命中区。
-  // 必须把面板滚到底部让主题行真正可见，否则「未注册」只是因为不可见，属于假阳性。
+  // P1-11：三套主题均可从主题选择行切换，并由设置补丁持久化。
+  const darkTheme = SettingsModule.applySettingKey('theme', { theme: 'light' }, 'dark');
+  const lightTheme = SettingsModule.applySettingKey('theme', { theme: 'dark' }, 'light');
+  const kidsTheme = SettingsModule.applySettingKey('theme', { theme: 'light' }, 'kids');
+  ok('P1-11 主题一/二/三均可选择',
+    darkTheme.patch.theme === 'dark' && lightTheme.patch.theme === 'light' && kidsTheme.patch.theme === 'kids',
+    JSON.stringify([darkTheme, lightTheme, kidsTheme]));
   setViewport(375, 667, 1);
   const sc = new SettingsScene();
   try {
     sc.enter({ screenWidth: 375, screenHeight: 667 });
-    sc.scrollY = 1e9;
-    sc.render(makeCtx(375, 667), 375, 667); // 第一帧：让场景钳制 scrollY
-    sc.render(makeCtx(375, 667), 375, 667); // 第二帧：主题行进入视口
+    sc.render(makeCtx(375, 667), 375, 667); // 先计算可滚动范围
+    sc.scrollY = Math.min(280, sc.maxScroll);
+    sc.render(makeCtx(375, 667), 375, 667);
     const keys = (sc.regions || []).map(r => r.key);
-    ok('P1-11 浅色主题滚到底部仍不注册可点命中区', keys.indexOf('themeLight') < 0,
+    ok('P1-11 主题选择行注册可交互区域', keys.indexOf('theme') >= 0,
       'regions=' + keys.join(','));
   } catch (e) {
     ok('P1-11 设置页可渲染', false, e.message);
@@ -406,6 +411,9 @@ section('D. R2 房间场景 / 菜单并列按钮（能力防御）');
     '几何赋值缺失（基线被改动）');
   // D4（IA 变更后）：菜单改为单入口 'versus' → 对局方式选择页；旧并列双按钮（_splitBtn）已移除。
   // 无条件断言（不再走「跳过」分支）：新 IA 已落盘，属真实验证。
+  ok('D4b 首页次级入口升级为个人中心',
+    /personalCenter/.test(menuSrc) && /个人中心/.test(menuSrc),
+    '首页个人中心入口缺失');
   ok('D4 menu.js 为单入口 "versus"（_mainBtn 接线）且不再含 _splitBtn',
     /['"]versus['"]/.test(menuSrc) &&
     /_mainBtn\([^)]*['"]versus['"]/.test(menuSrc) &&

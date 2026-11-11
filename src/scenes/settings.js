@@ -3,7 +3,7 @@
  * 同时导出可复用的 renderSettingsPanel() 与 applySettingKey()，供对局的 M3 设置抽屉复用。
  *
  * 第二轮（OPTIMIZATION_PLAN_ROUND2 §7）：三组信息架构、内容驱动行高（≥44pt 命中）、
- * 共享面板层 90ms 按压、浅色主题真正禁用、自动覆盖开启确认、清空局数、
+ * 共享面板层 90ms 按压、三套可切换主题、自动覆盖开启确认、清空局数，
  * 保存失败提示、共享 TopBar、底部渐隐与版本号、快速开局配置摘要。
  */
 const GameContext = require('../context');
@@ -28,6 +28,9 @@ const SETTING_DEFS = [
   { key: 'reduceMotion', group: 'display', type: 'toggle', label: '减弱动效', hint: '减少动画、闪烁与画面晃动' },
   { key: 'fontSize', group: 'display', type: 'choice', label: '字号', hint: '正文与标题的显示大小',
     choices: [{ label: '标准', value: 'standard' }, { label: '大', value: 'large' }], valueOf: (s) => s.fontSize || 'standard' },
+  { key: 'theme', group: 'display', type: 'choice', label: '主题', hint: '一 墨金 · 二 素雅 · 三 童趣',
+    choices: [{ label: '主题一', value: 'dark' }, { label: '主题二', value: 'light' }, { label: '主题三', value: 'kids' }],
+    valueOf: (s) => s.theme || 'dark' },
   { key: 'showLegalMoves', group: 'board', type: 'toggle', label: '显示合法走法', hint: '选中棋子后显示可走位置' },
   { key: 'showCoordinates', group: 'board', type: 'toggle', label: '显示坐标', hint: '棋盘边格显示 a–h / 1–8' },
   { key: 'defaultColor', group: 'board', type: 'choice', label: '初始执棋色', hint: '首次对局的执棋方；之后沿用上一局',
@@ -39,7 +42,6 @@ const SETTING_DEFS = [
   // —— 账号与隐私（v3）：只读 info 行不注册 region、不产生 patch，避免污染既有设置 ——
   { key: 'authStatus', group: 'account', type: 'info', label: '授权与云同步', hint: '当前授权与云同步状态' },
   { key: 'cloudSync', group: 'account', type: 'toggle', label: '云同步', hint: '关闭后本次不再上传；云端已有副本可在下方删除' },
-  { key: 'profile', group: 'account', type: 'action', label: '我的资料', hint: '查看与维护昵称' },
   { key: 'privacyPolicy', group: 'account', type: 'action', label: '隐私声明', hint: '查看完整声明' },
   { key: 'minorProtection', group: 'account', type: 'info', label: '适龄与家长监护', hint: PRIVACY.AGE_HINT },
   { key: 'deleteCloudData', group: 'account', type: 'action', label: '删除云端数据', hint: '需二次确认', danger: true }
@@ -49,9 +51,9 @@ const SETTING_DEFS = [
 // '__summary__' = 快速开局配置摘要；'__theme__' = 主题（深色当前 / 浅色开发中）。
 const GROUPS = [
   { id: 'board', title: '对局与棋盘', keys: ['defaultColor', 'showLegalMoves', 'showCoordinates', 'skipSetup', '__summary__'] },
-  { id: 'display', title: '显示与反馈', keys: ['soundEnabled', 'reduceMotion', 'fontSize', '__theme__'] },
+  { id: 'display', title: '显示与反馈', keys: ['soundEnabled', 'reduceMotion', 'fontSize', 'theme'] },
   { id: 'records', title: '棋谱', keys: ['autoSaveGame', 'autoPrune', 'clearAll'] },
-  { id: 'account', title: '账号与隐私', keys: ['authStatus', 'cloudSync', 'profile', 'privacyPolicy', 'minorProtection', 'deleteCloudData'] }
+  { id: 'account', title: '账号与隐私', keys: ['authStatus', 'cloudSync', 'privacyPolicy', 'minorProtection', 'deleteCloudData'] }
 ];
 
 const BOTTOM_PAD = 12; // 滚动内容底部内边距（P2-02）
@@ -99,9 +101,10 @@ function applySettingKey(key, settings, choice) {
     return { patch: { defaultColor: v }, sound: 'toggle' };
   }
   if (key === 'clearAll') return { action: 'confirmClear' };
-  // 浅色主题不注册 region（P1-11）；themeDark 为当前态、点击无操作。
-  if (key === 'themeLight') return { action: 'toast', message: '浅色主题即将推出' };
-  if (key === 'themeDark') return {};
+  if (key === 'theme') {
+    const v = choice || 'dark';
+    return { patch: { theme: ['dark', 'light', 'kids'].indexOf(v) >= 0 ? v : 'dark' }, sound: 'toggle' };
+  }
   // —— 账号与隐私：只返回 action，绝不产生 patch（不污染既有 DEFAULT_SETTINGS）——
   // authStatus / minorProtection 为只读 info 行，不注册 region，走到此处返回 {}。
   if (key === 'cloudSync') return { action: 'toggleCloudSync' };
@@ -546,11 +549,6 @@ function renderSettingsPanel(ctx, x, y, w, h, scrollY, settings, opts) {
           h: Math.max(panels.MIN_TAP, panels.lineHeight('caption') + 12) });
         continue;
       }
-      if (key === '__theme__') {
-        const m = panels.measureSettingRow(ctx, w, '主题', '墨金棋院 · 浅色主题开发中', 0, { maxHintLines: 2 });
-        rows.push({ type: 'theme', m: m, h: m.h });
-        continue;
-      }
       const def = defByKey[key];
       if (!def) continue;
       const controlW = controlWidthFor(def);
@@ -846,3 +844,4 @@ module.exports.authStatusHint = authStatusHint;
 // 基本资料昵称读写（供 gameplay 记录远程对端昵称 / 棋谱链路复用，仅导出不改实现）
 module.exports.readProfile = readProfile;
 module.exports.cleanNickname = cleanNickname;
+module.exports.writeProfile = writeProfile;
