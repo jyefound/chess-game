@@ -295,8 +295,8 @@ class PersonalCenterScene {
     const b = badgeList(stats()).filter(item => item.id === id)[0];
     if (!b) return;
     const message = b.earned
-      ? b.note + '\\n\\n解锁条件：' + b.desc + '\\n当前进度：' + b.value + ' / ' + b.target
-      : b.note + '\\n\\n解锁条件：' + b.desc + '\\n当前进度：' + b.value + ' / ' + b.target + '\\n再接再厉，下一枚徽章正在等你。';
+      ? b.note + '\n\n解锁条件：' + b.desc + '\n当前进度：' + b.value + ' / ' + b.target
+      : b.note + '\n\n解锁条件：' + b.desc + '\n当前进度：' + b.value + ' / ' + b.target + '\n再接再厉，下一枚徽章正在等你。';
     GameContext.openModal('confirm', {
       title: b.title + (b.earned ? ' · 已获得' : ' · 未解锁'),
       height: 230, message,

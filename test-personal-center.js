@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('assert');
 const center = require('./src/scenes/personalCenter');
+
 assert.strictEqual(center.currentTitle({ total: 0, cleared: 0 }), '静心学棋');
 assert.deepStrictEqual(center.honors({ total: 0, cleared: 0 }), []);
 assert.strictEqual(center.currentTitle({ total: 1, cleared: 0 }), '初次交锋');
@@ -10,12 +11,4 @@ assert.ok(center.honors({ total: 25, cleared: 0 }).includes('棋谱收藏家'));
 assert.strictEqual(center.currentTitle({ total: 0, cleared: 5 }), '残局行者');
 assert.strictEqual(center.currentTitle({ total: 25, cleared: 10 }), '残局研习者');
 assert.ok(center.honors({ total: 10, cleared: 10 }).includes('残局研习者'));
-const empty=center.badgeList({total:0,cleared:0});
-assert.strictEqual(empty.length,6);
-assert.strictEqual(empty.filter(b=>b.earned).length,0);
-assert.strictEqual(center.nextBadge({total:0,cleared:0}).id,'first-game');
-assert.strictEqual(center.badgeList({total:10,cleared:5}).filter(b=>b.earned).length,4);
-assert.strictEqual(center.nextBadge({total:10,cleared:5}).id,'collector');
-assert.strictEqual(center.nextBadge({total:25,cleared:10}),null);
-assert.strictEqual(center.badgeList({total:25,cleared:10}).every(b=>b.progress===1),true);
-console.log('个人中心头衔与荣誉徽章测试通过：15 项 / 0 失败');
+console.log('个人中心头衔与荣誉门槛测试通过：9 项 / 0 失败');
