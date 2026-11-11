@@ -100,6 +100,7 @@ class PersonalCenterScene {
       title: '个人中心', fontKey: 'h1',
       back: { key: 'back', label: '返回', pressed: this.tap.isPressing('back', Date.now()) }
     });
+    this._nav.regions.forEach(r => this.regions.push(r));
     const top = this._nav.bottom + 14, bottom = Math.min(L.contentBottom || H - 18, H - 16);
     this.contentTop = top; this.contentBottom = bottom;
     const s = stats(), p = profile(), x = 16, cw = W - 32;
@@ -202,12 +203,11 @@ class PersonalCenterScene {
     else if (key === 'settings') { GameContext.emit('navigate', { to: 'settings' }); GameContext.pushScene('settings', { from: 'personal' }); }
   }
   _hit(x, y) {
-    if (y < this.contentTop || y > this.contentBottom) return null;
     for (let i = this.regions.length - 1; i >= 0; i--) {
-      const r = this.regions[i];
-      if (r.rect.y >= this.contentTop && r.rect.y + r.rect.h <= this.contentBottom && inRect(x, y, r.rect)) return r.key;
+      const r = this.regions[i], fixed = r.fixed === true;
+      if ((!fixed && (y < this.contentTop || y > this.contentBottom)) || (fixed && y > this.contentTop)) continue;
+      if (inRect(x, y, r.rect)) return r.key;
     }
-    if (this._nav && topbar.hitTopBar) return topbar.hitTopBar(this._nav, x, y) || null;
     return null;
   }
 }

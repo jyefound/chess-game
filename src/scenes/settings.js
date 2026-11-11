@@ -39,7 +39,6 @@ const SETTING_DEFS = [
   // —— 账号与隐私（v3）：只读 info 行不注册 region、不产生 patch，避免污染既有设置 ——
   { key: 'authStatus', group: 'account', type: 'info', label: '授权与云同步', hint: '当前授权与云同步状态' },
   { key: 'cloudSync', group: 'account', type: 'toggle', label: '云同步', hint: '关闭后本次不再上传；云端已有副本可在下方删除' },
-  { key: 'profile', group: 'account', type: 'action', label: '我的资料', hint: '查看与维护昵称' },
   { key: 'privacyPolicy', group: 'account', type: 'action', label: '隐私声明', hint: '查看完整声明' },
   { key: 'minorProtection', group: 'account', type: 'info', label: '适龄与家长监护', hint: PRIVACY.AGE_HINT },
   { key: 'deleteCloudData', group: 'account', type: 'action', label: '删除云端数据', hint: '需二次确认', danger: true }
@@ -51,7 +50,7 @@ const GROUPS = [
   { id: 'board', title: '对局与棋盘', keys: ['defaultColor', 'showLegalMoves', 'showCoordinates', 'skipSetup', '__summary__'] },
   { id: 'display', title: '显示与反馈', keys: ['soundEnabled', 'reduceMotion', 'fontSize', '__theme__'] },
   { id: 'records', title: '棋谱', keys: ['autoSaveGame', 'autoPrune', 'clearAll'] },
-  { id: 'account', title: '账号与隐私', keys: ['authStatus', 'cloudSync', 'profile', 'privacyPolicy', 'minorProtection', 'deleteCloudData'] }
+  { id: 'account', title: '账号与隐私', keys: ['authStatus', 'cloudSync', 'privacyPolicy', 'minorProtection', 'deleteCloudData'] }
 ];
 
 const BOTTOM_PAD = 12; // 滚动内容底部内边距（P2-02）

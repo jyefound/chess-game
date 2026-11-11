@@ -218,6 +218,7 @@ const SCENES = [
     name: 'settings', file: 'src/scenes/settings', label: '设置',
     driver: (scene, sm) => defaultEnter(scene, sm)
   },
+  { name: 'personal-center', file: 'src/scenes/personalCenter', label: '个人中心', driver: defaultEnter },
   {
     name: 'endgameMap', file: 'src/scenes/endgameMap', label: '阵图(残局关卡)',
     driver: (scene, sm) => {

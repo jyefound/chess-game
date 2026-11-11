@@ -406,6 +406,9 @@ section('D. R2 房间场景 / 菜单并列按钮（能力防御）');
     '几何赋值缺失（基线被改动）');
   // D4（IA 变更后）：菜单改为单入口 'versus' → 对局方式选择页；旧并列双按钮（_splitBtn）已移除。
   // 无条件断言（不再走「跳过」分支）：新 IA 已落盘，属真实验证。
+  ok('D4b 首页次级入口升级为个人中心',
+    /personalCenter/.test(menuSrc) && /个人中心/.test(menuSrc),
+    '首页个人中心入口缺失');
   ok('D4 menu.js 为单入口 "versus"（_mainBtn 接线）且不再含 _splitBtn',
     /['"]versus['"]/.test(menuSrc) &&
     /_mainBtn\([^)]*['"]versus['"]/.test(menuSrc) &&
