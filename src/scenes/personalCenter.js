@@ -109,7 +109,7 @@ class PersonalCenterScene {
     rr(ctx, x, y, cw, 104, R.card || 16); ctx.fillStyle = C.surface1; ctx.fill();
     ctx.strokeStyle = C.border; ctx.lineWidth = 1; rr(ctx, x + .5, y + .5, cw - 1, 103, R.card || 16); ctx.stroke();
     ctx.fillStyle = C.accentFade; ctx.beginPath(); ctx.arc(x + 48, y + 50, 27, 0, Math.PI * 2); ctx.fill();
-    icons.drawIcon(ctx, 'twoPlayers', x + 48, y + 50, 25, C.accent);
+    icons.drawIcon(ctx, 'user', x + 48, y + 50, 25, C.accent);
     ctx.fillStyle = C.textPrimary; ctx.font = TF('subtitleB'); ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText(p.nickname || '棋友', x + 88, y + 34);
     ctx.fillStyle = C.textSecondary; ctx.font = TF('caption');

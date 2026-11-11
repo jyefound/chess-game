@@ -181,7 +181,7 @@ class MenuScene {
     const slotW   = tabSpan / 3;
     this._rowBtn(ctx, tabX0 + slotW * 0.5, rowY + rowH / 2, 'academy', '锦囊阁', 'academy');
     this._rowBtn(ctx, tabX0 + slotW * 1.5, rowY + rowH / 2, 'records', '棋谱', 'records');
-    this._rowBtn(ctx, tabX0 + slotW * 2.5, rowY + rowH / 2, 'settings', '设置', 'settings');
+    this._rowBtn(ctx, tabX0 + slotW * 2.5, rowY + rowH / 2, 'personalCenter', '个人中心', 'user');
     // 版本号已移至「设置」页底部（settings.js），首屏不再展示，避免信息过载。
 
     // ---- 通用模态（P2 断点恢复 M7 等，最上层绘制）----
