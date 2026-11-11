@@ -48,7 +48,7 @@ const SETTING_DEFS = [
 ];
 
 // 三组信息架构（§7.1）：组标题画在容器外，组内行连续排列。
-// '__summary__' = 快速开局配置摘要；theme = 三套主题选择。
+// '__summary__' = 快速开局配置摘要；'__theme__' = 主题（深色当前 / 浅色开发中）。
 const GROUPS = [
   { id: 'board', title: '对局与棋盘', keys: ['defaultColor', 'showLegalMoves', 'showCoordinates', 'skipSetup', '__summary__'] },
   { id: 'display', title: '显示与反馈', keys: ['soundEnabled', 'reduceMotion', 'fontSize', 'theme'] },
@@ -424,6 +424,18 @@ function toggleSwitch(ctx, cx, cy2, on, disabled) {
 }
 
 /**
+ * 主题行：降级为单行只读信息（浅色未上线）。只绘制 label + hint 文本，
+ * 不画任何选择块，也不注册 themeDark / themeLight 命中区。
+ */
+function drawThemeRow(ctx, r, x, cy, rh, screenY, visible, scrollY, regions, PAD, w) {
+  const m = r.m;
+  let ty = cy + 10;
+  const lh = panels.drawLines(ctx, m.labelLines, x + PAD, ty, C.textPrimary, 'body');
+  ty += lh + 4;
+  if (m.hintLines.length) panels.drawLines(ctx, m.hintLines, x + PAD, ty, C.textSecondary, 'caption');
+  // 只读信息行：不注册任何 theme 命中区（满足 themeLight 不注册断言，顺带 themeDark 也不注册）。
+}
+
 /**
  * 只读信息行（type:'info'）：复用主题行思路，label + hint 用 drawLines 绘制，
  * 不画右侧控件、不注册任何 region，因此点击无响应、也不产生 patch。

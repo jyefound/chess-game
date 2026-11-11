@@ -352,8 +352,8 @@ section('C. 设置项文案 / 动作语义');
   const sc = new SettingsScene();
   try {
     sc.enter({ screenWidth: 375, screenHeight: 667 });
-    sc.scrollY = 1e9;
-    sc.render(makeCtx(375, 667), 375, 667);
+    sc.render(makeCtx(375, 667), 375, 667); // 先计算可滚动范围
+    sc.scrollY = Math.min(280, sc.maxScroll);
     sc.render(makeCtx(375, 667), 375, 667);
     const keys = (sc.regions || []).map(r => r.key);
     ok('P1-11 主题选择行注册可交互区域', keys.indexOf('theme') >= 0,
