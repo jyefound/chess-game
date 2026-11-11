@@ -238,7 +238,7 @@ class PersonalCenterScene {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(b.title, bx + badgeW / 2, by + 75);
       ctx.fillStyle = C.textSecondary; ctx.font = TF('micro'); ctx.fillText(b.desc, bx + badgeW / 2, by + 94);
       ctx.fillStyle = b.earned ? C.success : C.textTertiary; ctx.font = TF('micro');
-      ctx.fillText(b.earned ? '✦ 已获得' : (b.value + ' / ' + b.target), bx + badgeW / 2, by + 111);
+      ctx.fillText(b.earned ? '已获得' : (b.value + ' / ' + b.target), bx + badgeW / 2, by + 111);
       this.regions.push({ key: 'badge:' + b.id, rect: { x: bx, y: by, w: badgeW, h: badgeH } });
     }
     y += Math.ceil(badgeItems.length / 2) * (badgeH + 10) - 10;
