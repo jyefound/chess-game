@@ -60,6 +60,13 @@ class ChessGame {
    * @returns {boolean} 是否成功
    */
   makeMove(move) {
+    // 终局后禁止继续走子；同时对外部调用做坐标校验，避免空对象/越界坐标导致崩溃。
+    if (this.result || !move ||
+        !Number.isInteger(move.fromRow) || !Number.isInteger(move.fromCol) ||
+        !Number.isInteger(move.toRow) || !Number.isInteger(move.toCol) ||
+        !Board.inBounds(move.fromRow, move.fromCol) || !Board.inBounds(move.toRow, move.toCol)) {
+      return false;
+    }
     const piece = this.board.getPiece(move.fromRow, move.fromCol);
     if (!piece || piece.color !== this.turn) return false;
 
@@ -311,6 +318,7 @@ class ChessGame {
    * 检查游戏结果
    */
   checkGameResult() {
+    if (this.result) return;
     const legalMoves = this.getLegalMoves();
     const inCheck = movegen.isInCheck(this.board, this.turn);
 
@@ -327,24 +335,23 @@ class ChessGame {
       return;
     }
 
-    // 50 回合规则
-    if (this.halfMoveClock >= 100) {
-      this.result = 'draw';
-      this.resultReason = 'fifty_moves';
-      return;
-    }
-
-    // 子力不足和棋
+    // 死局：任何合法续着都不可能形成将杀时立即和棋。
     if (this.isInsufficientMaterial()) {
       this.result = 'draw';
       this.resultReason = 'insufficient_material';
       return;
     }
 
-    // 三次重复局面（简化版：基于走子历史长度检查）
-    if (this.isThreefoldRepetition()) {
+    // FIDE 自动和棋阈值：连续 75 回合未吃子/未走兵，或五次重复局面。
+    // 50 回合 / 三次重复属于可申请和棋，不应由引擎擅自结束对局。
+    if (this.halfMoveClock >= 150) {
       this.result = 'draw';
-      this.resultReason = 'threefold';
+      this.resultReason = 'seventyfive_moves';
+      return;
+    }
+    if (this.isFivefoldRepetition()) {
+      this.result = 'draw';
+      this.resultReason = 'fivefold';
     }
   }
 
@@ -380,6 +387,15 @@ class ChessGame {
       return true;
     }
 
+    // 王 + 象 vs 王 + 象：双方象都只能在同色格活动时，不存在任何可达将杀局面。
+    const allNonKing = whiteNonKing.concat(blackNonKing);
+    if (allNonKing.length === 2 &&
+        allNonKing.every(p => p.piece.type === PIECE.BISHOP) &&
+        ((allNonKing[0].row + allNonKing[0].col) % 2) ===
+        ((allNonKing[1].row + allNonKing[1].col) % 2)) {
+      return true;
+    }
+
     return false;
   }
 
@@ -391,6 +407,39 @@ class ChessGame {
   isThreefoldRepetition() {
     const key = this.getPositionKey();
     return (this.positionCounts.get(key) || 0) >= 3;
+  }
+
+  /** 五次重复局面：FIDE 自动和棋条件。 */
+  isFivefoldRepetition() {
+    const key = this.getPositionKey();
+    return (this.positionCounts.get(key) || 0) >= 5;
+  }
+
+  /** 当前可由行棋方申请的和棋理由；不包含自动和棋条件。 */
+  getClaimableDrawReasons() {
+    if (this.result) return [];
+    const reasons = [];
+    if (this.halfMoveClock >= 100 && this.halfMoveClock < 150) reasons.push('fifty_moves');
+    const repetitions = this.positionCounts.get(this.getPositionKey()) || 0;
+    if (repetitions >= 3 && repetitions < 5) reasons.push('threefold');
+    return reasons;
+  }
+
+  canClaimDraw() {
+    return this.getClaimableDrawReasons().length > 0;
+  }
+
+  /** 申请当前局面的和棋；reason 可选，省略时优先采用首个可申请理由。 */
+  claimDraw(reason) {
+    if (this.result) return false;
+    this.checkGameResult();
+    if (this.result) return false;
+    const reasons = this.getClaimableDrawReasons();
+    const selected = reason || reasons[0];
+    if (reasons.indexOf(selected) < 0) return false;
+    this.result = 'draw';
+    this.resultReason = selected;
+    return true;
   }
 
   /**
@@ -407,7 +456,13 @@ class ChessGame {
     key += this.turn;
     key += (this.castling.wk ? 'K' : '') + (this.castling.wq ? 'Q' : '') +
            (this.castling.bk ? 'k' : '') + (this.castling.bq ? 'q' : '');
-    key += this.enPassantTarget ? this.enPassantTarget.row + ',' + this.enPassantTarget.col : '-';
+    // FIDE 重复局面只在吃过路兵确实是合法走法时计入 EP 目标格；
+    // 仅有 FEN 的原始 EP 标记、但对方没有可吃兵或吃后王会被将，并不改变可走着法集合。
+    let epKey = '-';
+    if (this.enPassantTarget && this.getLegalMoves().some(move => move.isEnPassant)) {
+      epKey = this.enPassantTarget.row + ',' + this.enPassantTarget.col;
+    }
+    key += epKey;
     return key;
   }
 
