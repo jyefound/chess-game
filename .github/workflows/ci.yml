@@ -33,7 +33,7 @@ jobs:
         run: |
           node test.js
           node test-engine.js
-          node test-mechanics.js
+          node test-mechanics.js\n          node test-personal-center.js
       - name: Gameplay and data regressions
         run: |
           node test-integration.js
