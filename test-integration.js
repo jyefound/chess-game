@@ -253,7 +253,7 @@ const { COLOR } = require('./src/core/constants');
   else ok('升变 UCI 后缀 a7a8q', false, '未找到升变走法');
 }
 
-// A3 三次重复（Nf3 Nf6 Ng1 Ng8 循环两轮回到初始局面 3 次）
+// A3 三次重复（Nf3 Nf6 Ng1 Ng8 循环两轮回到初始局面 3 次；需由行棋方申请和棋）
 {
   const g = new ChessGame();
   const seq = [
@@ -266,8 +266,11 @@ const { COLOR } = require('./src/core/constants');
     if (!m) { allOk = false; break; }
     g.makeMove(m);
   }
-  ok('三次重复判和触发', g.result === 'draw' && g.resultReason === 'threefold',
+  ok('三次重复开放和棋申请但不自动结束',
+    g.result === null && g.canClaimDraw() && g.getClaimableDrawReasons().includes('threefold'),
     'result=' + g.result + ' reason=' + g.resultReason + ' moves=' + g.uciLog.length);
+  ok('三次重复可由行棋方申请和棋', g.claimDraw('threefold') === true &&
+    g.result === 'draw' && g.resultReason === 'threefold');
   ok('三次重复走法执行完整', allOk);
 }
 

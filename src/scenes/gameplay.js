@@ -1360,7 +1360,9 @@ class GameplayScene {
       { key: 'menu', label: '返回菜单' }
     ];
     // 本地/人机对局可申请和棋；远程房间的结果必须经服务端协议同步，不能只改本端状态。
-    if (this.mode !== 'remote' && this.game && this.game.canClaimDraw && this.game.canClaimDraw()) {
+    if (this.mode !== 'remote' &&
+        (this.mode !== 'ai' || this.game.turn === this.playerColor) &&
+        this.game && this.game.canClaimDraw && this.game.canClaimDraw()) {
       const reasons = this.game.getClaimableDrawReasons();
       const labels = reasons.map(reason => reason === 'threefold' ? '重复局面' : '50 回合');
       items.splice(2, 0, { key: 'claimDraw', label: '申请和棋 · ' + labels.join(' / ') });
@@ -1960,7 +1962,7 @@ class GameplayScene {
   openRules() {
     GameContext.openModal('confirm', {
       title: '基本规则', height: 220,
-      message: '白先黑后。兵直走斜吃、到底线升变；车走横竖、象走斜线、后横竖斜、马走「日」、王每次一格。王车易位与吃过路兵为特殊走法。将死对方王即获胜；逼和、50 回合、三次重复、子力不足为和棋。',
+      message: '白先黑后。兵直走斜吃、到底线升变；车走横竖、象走斜线、后横竖斜、马走「日」、王每次一格。王车易位与吃过路兵为特殊走法。将死获胜；逼和、子力不足自动和棋；50 回合或三次重复可申请和棋，75 回合或五次重复自动和棋。',
       buttons: [{ label: '知道了', action: 'ok', variant: 'primary' }],
       onAction: () => GameContext.closeModal()
     });
